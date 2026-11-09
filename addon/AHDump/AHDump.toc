@@ -1,0 +1,8 @@
+## Interface: 16001, 120105
+## Title: AH Dump
+## Notes: Schreibt das komplette Auktionshaus per /ahdump in eine SavedVariables-Datei
+## Author: jofri99
+## Version: 1.1
+## SavedVariables: AHDumpDB
+
+AHDump.lua

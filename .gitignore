@@ -1,0 +1,9 @@
+# Dumps koennen sehr gross werden - standardmaessig nicht einchecken
+data/*
+!data/.gitkeep
+!data/README.md
+
+*.bak
+*.lua.bak
+.DS_Store
+Thumbs.db

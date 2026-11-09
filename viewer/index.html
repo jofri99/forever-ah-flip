@@ -1,0 +1,512 @@
+<!doctype html>
+<html lang="de">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Forever AH Flip</title>
+<style>
+  :root {
+    --bg: #f5f6f8; --panel: #ffffff; --fg: #1a1d21; --muted: #6b7280;
+    --border: #e2e5ea; --row: #fafbfc; --accent: #a8822f;
+    --good: #1a7f37; --bad: #b42318;
+    --gold: #8a6d1f; --silver: #5b6269; --copper: #9a5b32;
+    /* Item-Qualitaeten, fuer hellen Hintergrund abgedunkelt */
+    --q0: #6b7280; --q1: #1a1d21; --q2: #15803d; --q3: #1d4ed8;
+    --q4: #7e22ce; --q5: #c2410c; --q6: #92400e; --q7: #0369a1;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #14171b; --panel: #1b1f25; --fg: #e8eaed; --muted: #98a1ab;
+      --border: #2a303a; --row: #1f242b; --accent: #d9b877;
+      --good: #4ade80; --bad: #f87171;
+      --gold: #d9b877; --silver: #a8adb5; --copper: #c08457;
+      /* im Dunkeln die originalen WoW-Farben */
+      --q0: #9d9d9d; --q1: #ffffff; --q2: #1eff00; --q3: #0070dd;
+      --q4: #a335ee; --q5: #ff8000; --q6: #e6cc80; --q7: #00ccff;
+    }
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--bg); color: var(--fg);
+    font: 14px/1.5 -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Arial, sans-serif;
+  }
+  header { padding: 20px 16px 12px; max-width: 1400px; margin: 0 auto; }
+  h1 { font-size: 20px; margin: 0 0 2px; letter-spacing: -0.01em; }
+  .sub { color: var(--muted); font-size: 13px; }
+  main { max-width: 1400px; margin: 0 auto; padding: 0 16px 60px; }
+
+  .drop {
+    border: 2px dashed var(--border); border-radius: 12px; padding: 40px 20px;
+    text-align: center; background: var(--panel); transition: border-color .15s, background .15s;
+  }
+  .drop.over { border-color: var(--accent); background: var(--row); }
+  .drop p { margin: 8px 0; color: var(--muted); }
+  .btn {
+    display: inline-block; padding: 8px 16px; border-radius: 8px; cursor: pointer;
+    background: var(--accent); color: #15171a; border: 0; font-weight: 600; font-size: 14px;
+  }
+  .btn.ghost { background: transparent; color: var(--fg); border: 1px solid var(--border); font-weight: 500; }
+
+  .stats { display: flex; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+  .stat {
+    background: var(--panel); border: 1px solid var(--border); border-radius: 10px;
+    padding: 10px 14px; min-width: 130px;
+  }
+  .stat .k { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: .04em; }
+  .stat .v { font-size: 18px; font-weight: 600; font-variant-numeric: tabular-nums; }
+
+  .tabs { display: flex; gap: 4px; margin: 18px 0 10px; flex-wrap: wrap; }
+  .tab {
+    padding: 7px 14px; border-radius: 8px; cursor: pointer; border: 1px solid transparent;
+    color: var(--muted); background: transparent; font-size: 14px;
+  }
+  .tab.active { background: var(--panel); border-color: var(--border); color: var(--fg); font-weight: 600; }
+
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  input[type="search"], input[type="number"] {
+    background: var(--panel); border: 1px solid var(--border); color: var(--fg);
+    border-radius: 8px; padding: 7px 10px; font-size: 14px;
+  }
+  input[type="search"] { min-width: 240px; flex: 1 1 240px; }
+  input[type="number"] { width: 80px; }
+  label.ctl { color: var(--muted); font-size: 13px; display: inline-flex; align-items: center; gap: 6px; }
+
+  .wrap { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: auto; max-height: 70vh; }
+  table { border-collapse: collapse; width: 100%; font-size: 13px; }
+  th, td { padding: 7px 12px; text-align: left; white-space: nowrap; }
+  th {
+    position: sticky; top: 0; background: var(--panel); border-bottom: 1px solid var(--border);
+    cursor: pointer; user-select: none; font-size: 12px; color: var(--muted);
+    text-transform: uppercase; letter-spacing: .03em;
+  }
+  th:hover { color: var(--fg); }
+  th.num { text-align: right; }
+  th .arrow { opacity: .5; font-size: 10px; }
+  tbody tr:nth-child(even) { background: var(--row); }
+  td.num { text-align: right; font-variant-numeric: tabular-nums; }
+  .g { color: var(--gold); } .s { color: var(--silver); } .c { color: var(--copper); }
+  .q0 { color: var(--q0); } .q1 { color: var(--q1); } .q2 { color: var(--q2); } .q3 { color: var(--q3); }
+  .q4 { color: var(--q4); } .q5 { color: var(--q5); } .q6 { color: var(--q6); } .q7 { color: var(--q7); }
+  .pos { color: var(--good); font-weight: 600; } .neg { color: var(--bad); }
+  .note { color: var(--muted); font-size: 12px; margin: 10px 2px; }
+  .err { color: var(--bad); margin: 12px 0; }
+  .hidden { display: none !important; }
+</style>
+</head>
+<body>
+<header>
+  <h1>Forever AH Flip</h1>
+  <div class="sub">Auktionshaus-Dump anzeigen und Flip-Kandidaten finden</div>
+</header>
+
+<main>
+  <section id="loader">
+    <div class="drop" id="drop">
+      <p><strong>AHDump.lua</strong> oder <strong>.csv</strong> hier ablegen</p>
+      <p><button class="btn" id="pick">Datei waehlen</button></p>
+      <p class="note">
+        Die Datei liegt unter <code>WTF\Account\&lt;ACCOUNT&gt;\SavedVariables\AHDump.lua</code>.
+        Alles passiert lokal im Browser &ndash; es wird nichts hochgeladen.
+      </p>
+    </div>
+    <div class="err hidden" id="err"></div>
+  </section>
+
+  <section id="app" class="hidden">
+    <div class="stats" id="stats"></div>
+
+    <div class="tabs">
+      <button class="tab active" data-view="items">Pro Item</button>
+      <button class="tab" data-view="flips">Flip-Kandidaten</button>
+      <button class="tab" data-view="raw">Alle Auktionen</button>
+      <button class="tab ghost" id="reset" style="margin-left:auto">Andere Datei</button>
+    </div>
+
+    <div class="controls">
+      <input type="search" id="q" placeholder="Item oder Verkaeufer suchen ...">
+      <label class="ctl hidden" id="ctlMinAuctions">min. Auktionen <input type="number" id="minAuctions" value="3" min="1" step="1"></label>
+      <label class="ctl hidden" id="ctlMinMargin">min. Marge % <input type="number" id="minMargin" value="20" min="0" step="5"></label>
+    </div>
+
+    <div class="wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
+    <div class="note" id="footnote"></div>
+  </section>
+</main>
+
+<script>
+"use strict";
+
+var AH_CUT = 0.05;      // Auktionshaus-Gebuehr beim Verkauf
+var MAX_DISPLAY = 800;  // mehr Zeilen bringt im Browser nichts
+
+var TIME_LEFT = { 1: "< 30 Min", 2: "30 Min - 2 Std", 3: "2 - 12 Std", 4: "> 12 Std" };
+var DEFAULT_HEADER = "index,itemID,itemString,name,quality,count,minBid,buyout,bidAmount,owner,timeLeft,level,isCommodity";
+
+var state = { meta: {}, rows: [], items: [], view: "items", sort: { key: null, dir: 1 } };
+
+/* ---------- Helfer ---------- */
+
+function money(copper) {
+  var c = Math.round(copper || 0);
+  if (!isFinite(c)) return "-";
+  var g = Math.floor(c / 10000), s = Math.floor((c % 10000) / 100), k = c % 100;
+  var out = [];
+  if (g) out.push('<span class="g">' + g.toLocaleString("de-DE") + "g</span>");
+  if (g || s) out.push('<span class="s">' + s + "s</span>");
+  out.push('<span class="c">' + k + "k</span>");
+  return out.join(" ");
+}
+
+function esc(s) {
+  return String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/"/g, "&quot;");
+}
+
+function itemCell(name, itemID, quality) {
+  var q = (quality >= 0 && quality <= 7) ? quality : 1;
+  var label = name || ("Item " + itemID);
+  return '<span class="q' + q + '">' + esc(label) + "</span>";
+}
+
+function median(sortedArr) {
+  if (!sortedArr.length) return 0;
+  var mid = Math.floor(sortedArr.length / 2);
+  return sortedArr.length % 2 ? sortedArr[mid] : (sortedArr[mid - 1] + sortedArr[mid]) / 2;
+}
+
+/* ---------- Parser ---------- */
+
+function parseCsvLine(line) {
+  var out = [], cur = "", inQuotes = false;
+  for (var i = 0; i < line.length; i++) {
+    var ch = line[i];
+    if (inQuotes) {
+      if (ch === '"') {
+        if (line[i + 1] === '"') { cur += '"'; i++; } else { inQuotes = false; }
+      } else { cur += ch; }
+    } else if (ch === '"') {
+      inQuotes = true;
+    } else if (ch === ",") {
+      out.push(cur); cur = "";
+    } else {
+      cur += ch;
+    }
+  }
+  out.push(cur);
+  return out;
+}
+
+function parseDump(text) {
+  var meta = {}, header = null, lines = [], m, i;
+
+  if (text.indexOf("AHDumpDB") !== -1) {
+    // SavedVariables-Datei direkt lesen
+    if ((m = text.match(/\["timestamp"\]\s*=\s*"([^"]*)"/))) meta.timestamp = m[1];
+    if ((m = text.match(/\["realm"\]\s*=\s*"([^"]*)"/)))     meta.realm = m[1];
+    if ((m = text.match(/\["faction"\]\s*=\s*"([^"]*)"/)))   meta.faction = m[1];
+    if ((m = text.match(/\["header"\]\s*=\s*"([^"]*)"/)))    header = m[1];
+
+    var all = text.split(/\r?\n/), inRows = false;
+    for (i = 0; i < all.length; i++) {
+      var line = all[i];
+      if (!inRows) {
+        if (/\["rows"\]\s*=\s*\{/.test(line)) inRows = true;
+        continue;
+      }
+      if (/^\s*\},?\s*$/.test(line)) { inRows = false; continue; }
+      var r = line.match(/^\s*"(.*)",\s*(?:--.*)?$/);
+      if (r) lines.push(r[1].replace(/\\"/g, '"').replace(/\\\\/g, "\\"));
+    }
+  } else {
+    // normale CSV
+    var csv = text.split(/\r?\n/).filter(function (l) { return l.trim() !== ""; });
+    if (!csv.length) return { meta: meta, rows: [] };
+    header = csv[0];
+    lines = csv.slice(1);
+  }
+
+  var cols = parseCsvLine(header || DEFAULT_HEADER);
+  var idx = {};
+  cols.forEach(function (c, n) { idx[c.trim()] = n; });
+
+  var rows = [];
+  for (i = 0; i < lines.length; i++) {
+    var f = parseCsvLine(lines[i]);
+    if (f.length < 3) continue;
+
+    var count = parseInt(f[idx.count], 10) || 0;
+    var buyout = parseInt(f[idx.buyout], 10) || 0;
+    var commodityRaw = idx.isCommodity != null ? f[idx.isCommodity] : "";
+    var isCommodity = commodityRaw === "1" ? true : (commodityRaw === "0" ? false : null);
+
+    rows.push({
+      itemID: parseInt(f[idx.itemID], 10) || 0,
+      itemString: f[idx.itemString] || "",
+      name: f[idx.name] || "",
+      quality: parseInt(f[idx.quality], 10) || 0,
+      count: count,
+      minBid: parseInt(f[idx.minBid], 10) || 0,
+      buyout: buyout,
+      bidAmount: parseInt(f[idx.bidAmount], 10) || 0,
+      owner: f[idx.owner] || "",
+      timeLeft: parseInt(f[idx.timeLeft], 10) || 0,
+      level: parseInt(f[idx.level], 10) || 0,
+      isCommodity: isCommodity,
+      // Bei Commodities ist der Buyout bereits ein Stueckpreis.
+      unit: buyout > 0 ? (isCommodity ? buyout : (count > 0 ? buyout / count : buyout)) : 0
+    });
+  }
+  return { meta: meta, rows: rows };
+}
+
+/* ---------- Aggregation ---------- */
+
+function aggregate(rows) {
+  var map = new Map();
+
+  for (var i = 0; i < rows.length; i++) {
+    var r = rows[i];
+    var key = r.itemString || String(r.itemID);
+    var a = map.get(key);
+    if (!a) {
+      a = { key: key, itemID: r.itemID, name: r.name, quality: r.quality,
+            auctions: 0, qty: 0, units: [], cheapest: null };
+      map.set(key, a);
+    }
+    a.auctions++;
+    a.qty += r.count;
+    if (!a.name && r.name) a.name = r.name;
+    if (r.unit > 0) {
+      a.units.push(r.unit);
+      if (!a.cheapest || r.unit < a.cheapest.unit) a.cheapest = r;
+    }
+  }
+
+  var out = [];
+  map.forEach(function (a) {
+    a.units.sort(function (x, y) { return x - y; });
+    a.minUnit = a.units.length ? a.units[0] : 0;
+    a.median = median(a.units);
+    // Marktpreis = Median ohne das guenstigste Angebot - das will man ja selbst kaufen
+    a.market = a.units.length > 1 ? median(a.units.slice(1)) : a.median;
+    a.marginUnit = a.minUnit > 0 ? a.market * (1 - AH_CUT) - a.minUnit : 0;
+    a.marginPct = a.minUnit > 0 ? (a.marginUnit / a.minUnit) * 100 : 0;
+    a.stack = a.cheapest ? a.cheapest.count : 0;
+    a.profit = a.marginUnit * a.stack;
+    a.seller = a.cheapest ? a.cheapest.owner : "";
+    out.push(a);
+  });
+  return out;
+}
+
+/* ---------- Views ---------- */
+
+function matches(d, q) {
+  if (!q) return true;
+  var name = (d.name || "").toLowerCase();
+  var seller = (d.seller || d.owner || "").toLowerCase();
+  return name.indexOf(q) !== -1 || seller.indexOf(q) !== -1;
+}
+
+var VIEWS = {
+  items: {
+    cols: [
+      { key: "name",     label: "Item",      fmt: function (a) { return itemCell(a.name, a.itemID, a.quality); } },
+      { key: "auctions", label: "Auktionen", num: true, fmt: function (a) { return a.auctions; } },
+      { key: "qty",      label: "Menge",     num: true, fmt: function (a) { return a.qty.toLocaleString("de-DE"); } },
+      { key: "minUnit",  label: "Guenstigster / Stueck", num: true, fmt: function (a) { return money(a.minUnit); } },
+      { key: "market",   label: "Markt (Median)", num: true, fmt: function (a) { return money(a.market); } },
+      { key: "stack",    label: "Stack",     num: true, fmt: function (a) { return a.stack || ""; } },
+      { key: "seller",   label: "Verkaeufer", fmt: function (a) { return esc(a.seller); } }
+    ],
+    defaultSort: { key: "qty", dir: -1 },
+    data: function () { return state.items; }
+  },
+
+  flips: {
+    cols: [
+      { key: "name",       label: "Item",           fmt: function (a) { return itemCell(a.name, a.itemID, a.quality); } },
+      { key: "minUnit",    label: "Kauf / Stueck",  num: true, fmt: function (a) { return money(a.minUnit); } },
+      { key: "market",     label: "Markt (Median)", num: true, fmt: function (a) { return money(a.market); } },
+      { key: "marginUnit", label: "Marge / Stueck", num: true, fmt: function (a) {
+          return '<span class="' + (a.marginUnit > 0 ? "pos" : "neg") + '">' + money(a.marginUnit) + "</span>"; } },
+      { key: "marginPct",  label: "Marge %",   num: true, fmt: function (a) { return Math.round(a.marginPct) + " %"; } },
+      { key: "stack",      label: "Menge",     num: true, fmt: function (a) { return a.stack || ""; } },
+      { key: "profit",     label: "Gewinn",    num: true, fmt: function (a) {
+          return '<span class="' + (a.profit > 0 ? "pos" : "neg") + '">' + money(a.profit) + "</span>"; } },
+      { key: "auctions",   label: "Auktionen", num: true, fmt: function (a) { return a.auctions; } },
+      { key: "seller",     label: "Verkaeufer", fmt: function (a) { return esc(a.seller); } }
+    ],
+    defaultSort: { key: "profit", dir: -1 },
+    data: function () {
+      var minA = parseInt(document.getElementById("minAuctions").value, 10) || 1;
+      var minM = parseFloat(document.getElementById("minMargin").value) || 0;
+      return state.items.filter(function (a) {
+        return a.auctions >= minA && a.minUnit > 0 && a.marginUnit > 0 && a.marginPct >= minM;
+      });
+    }
+  },
+
+  raw: {
+    cols: [
+      { key: "name",      label: "Item",        fmt: function (r) { return itemCell(r.name, r.itemID, r.quality); } },
+      { key: "count",     label: "Anzahl", num: true, fmt: function (r) { return r.count; } },
+      { key: "unit",      label: "Preis / Stueck", num: true, fmt: function (r) { return r.unit ? money(r.unit) : "-"; } },
+      { key: "buyout",    label: "Sofortkauf",  num: true, fmt: function (r) { return r.buyout ? money(r.buyout) : "-"; } },
+      { key: "minBid",    label: "Mindestgebot", num: true, fmt: function (r) { return money(r.minBid); } },
+      { key: "bidAmount", label: "Gebot",       num: true, fmt: function (r) { return r.bidAmount ? money(r.bidAmount) : "-"; } },
+      { key: "timeLeft",  label: "Restzeit",    fmt: function (r) { return TIME_LEFT[r.timeLeft] || ""; } },
+      { key: "owner",     label: "Verkaeufer",  fmt: function (r) { return esc(r.owner); } }
+    ],
+    defaultSort: { key: "unit", dir: 1 },
+    data: function () { return state.rows; }
+  }
+};
+
+function render() {
+  var view = VIEWS[state.view];
+  var q = document.getElementById("q").value.trim().toLowerCase();
+
+  var data = view.data().filter(function (d) { return matches(d, q); });
+
+  var sortKey = state.sort.key || view.defaultSort.key;
+  var dir = state.sort.key ? state.sort.dir : view.defaultSort.dir;
+
+  data = data.slice().sort(function (a, b) {
+    var x = a[sortKey], y = b[sortKey];
+    if (typeof x === "string" || typeof y === "string") {
+      return String(x == null ? "" : x).localeCompare(String(y == null ? "" : y), "de") * dir;
+    }
+    return ((x || 0) - (y || 0)) * dir;
+  });
+
+  document.getElementById("thead").innerHTML = "<tr>" + view.cols.map(function (c) {
+    var arrow = c.key === sortKey ? ' <span class="arrow">' + (dir === 1 ? "▲" : "▼") + "</span>" : "";
+    return '<th data-key="' + c.key + '"' + (c.num ? ' class="num"' : "") + ">" + c.label + arrow + "</th>";
+  }).join("") + "</tr>";
+
+  var shown = data.slice(0, MAX_DISPLAY);
+  var html = [];
+  for (var i = 0; i < shown.length; i++) {
+    var cells = "";
+    for (var c = 0; c < view.cols.length; c++) {
+      var col = view.cols[c];
+      cells += "<td" + (col.num ? ' class="num"' : "") + ">" + col.fmt(shown[i]) + "</td>";
+    }
+    html.push("<tr>" + cells + "</tr>");
+  }
+  document.getElementById("tbody").innerHTML = html.join("");
+
+  document.getElementById("footnote").textContent = data.length > MAX_DISPLAY
+    ? "Zeigt " + MAX_DISPLAY + " von " + data.length.toLocaleString("de-DE") + " Zeilen - weiter eingrenzen oder anders sortieren."
+    : data.length.toLocaleString("de-DE") + " Zeilen.";
+
+  var isFlip = state.view === "flips";
+  document.getElementById("ctlMinAuctions").classList.toggle("hidden", !isFlip);
+  document.getElementById("ctlMinMargin").classList.toggle("hidden", !isFlip);
+}
+
+function renderStats() {
+  var withBuyout = 0, totalValue = 0, unknownCommodity = 0;
+  for (var i = 0; i < state.rows.length; i++) {
+    var r = state.rows[i];
+    if (r.buyout > 0) withBuyout++;
+    totalValue += r.buyout;
+    if (r.isCommodity === null) unknownCommodity++;
+  }
+
+  var stats = [
+    ["Auktionen", state.rows.length.toLocaleString("de-DE")],
+    ["Items", state.items.length.toLocaleString("de-DE")],
+    ["mit Sofortkauf", withBuyout.toLocaleString("de-DE")],
+    ["Warenwert", money(totalValue)],
+    ["Realm", esc(state.meta.realm || "?")],
+    ["Stand", esc(state.meta.timestamp || "?")]
+  ];
+  if (unknownCommodity) stats.push(["Stueckpreis unsicher", unknownCommodity.toLocaleString("de-DE")]);
+
+  document.getElementById("stats").innerHTML = stats.map(function (s) {
+    return '<div class="stat"><div class="k">' + s[0] + '</div><div class="v">' + s[1] + "</div></div>";
+  }).join("");
+}
+
+/* ---------- Laden ---------- */
+
+function load(text) {
+  var err = document.getElementById("err");
+  try {
+    var parsed = parseDump(text);
+    if (!parsed.rows.length) throw new Error("Keine Auktionen in der Datei gefunden.");
+    state.meta = parsed.meta;
+    state.rows = parsed.rows;
+    state.items = aggregate(parsed.rows);
+    state.sort = { key: null, dir: 1 };
+    err.classList.add("hidden");
+    document.getElementById("loader").classList.add("hidden");
+    document.getElementById("app").classList.remove("hidden");
+    renderStats();
+    render();
+  } catch (e) {
+    err.textContent = "Fehler: " + e.message;
+    err.classList.remove("hidden");
+  }
+}
+
+function readFile(file) {
+  var reader = new FileReader();
+  reader.onload = function () { load(String(reader.result)); };
+  reader.readAsText(file, "utf-8");
+}
+
+var drop = document.getElementById("drop");
+var input = document.createElement("input");
+input.type = "file";
+input.accept = ".lua,.csv,.txt";
+input.addEventListener("change", function () { if (input.files[0]) readFile(input.files[0]); });
+
+document.getElementById("pick").addEventListener("click", function () { input.click(); });
+["dragenter", "dragover"].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.add("over"); });
+});
+["dragleave", "drop"].forEach(function (ev) {
+  drop.addEventListener(ev, function (e) { e.preventDefault(); drop.classList.remove("over"); });
+});
+drop.addEventListener("drop", function (e) {
+  if (e.dataTransfer && e.dataTransfer.files[0]) readFile(e.dataTransfer.files[0]);
+});
+
+Array.prototype.forEach.call(document.querySelectorAll(".tab[data-view]"), function (tab) {
+  tab.addEventListener("click", function () {
+    Array.prototype.forEach.call(document.querySelectorAll(".tab[data-view]"), function (t) {
+      t.classList.remove("active");
+    });
+    tab.classList.add("active");
+    state.view = tab.getAttribute("data-view");
+    state.sort = { key: null, dir: 1 };
+    render();
+  });
+});
+
+document.getElementById("thead").addEventListener("click", function (e) {
+  var th = e.target.closest ? e.target.closest("th") : null;
+  if (!th) return;
+  var key = th.getAttribute("data-key");
+  if (state.sort.key === key) {
+    state.sort.dir *= -1;
+  } else {
+    state.sort = { key: key, dir: (key === "name" || key === "owner" || key === "seller") ? 1 : -1 };
+  }
+  render();
+});
+
+["q", "minAuctions", "minMargin"].forEach(function (id) {
+  document.getElementById(id).addEventListener("input", render);
+});
+
+document.getElementById("reset").addEventListener("click", function () {
+  document.getElementById("app").classList.add("hidden");
+  document.getElementById("loader").classList.remove("hidden");
+});
+</script>
+</body>
+</html>
