@@ -91,21 +91,29 @@
   .note { color: var(--muted); font-size: 12px; margin: 10px 2px; }
   .err { color: var(--bad); margin: 12px 0; }
   .hidden { display: none !important; }
+  select {
+    background: var(--panel); border: 1px solid var(--border); color: var(--fg);
+    border-radius: 8px; padding: 7px 10px; font-size: 14px;
+  }
+  a.item { color: inherit; text-decoration: none; }
+  a.item:hover { text-decoration: underline; }
+  .busy { color: var(--accent); }
 </style>
 </head>
 <body>
 <header>
   <h1>Forever AH Flip</h1>
-  <div class="sub">Auktionshaus-Dump anzeigen und Flip-Kandidaten finden</div>
+  <div class="sub">TSM-Marktdaten und eigene Auktionshaus-Dumps auswerten</div>
 </header>
 
 <main>
   <section id="loader">
     <div class="drop" id="drop">
-      <p><strong>AHDump.lua</strong> oder <strong>.csv</strong> hier ablegen</p>
+      <p><strong>AppData.lua</strong> (TSM Desktop App), <strong>AHDump.lua</strong> oder <strong>.csv</strong> hier ablegen</p>
       <p><button class="btn" id="pick">Datei waehlen</button></p>
       <p class="note">
-        Die Datei liegt unter <code>WTF\Account\&lt;ACCOUNT&gt;\SavedVariables\AHDump.lua</code>.
+        TSM-Daten: <code>Interface\AddOns\TradeSkillMaster_AppHelper\AppData.lua</code><br>
+        Eigener Dump: <code>WTF\Account\&lt;ACCOUNT&gt;\SavedVariables\AHDump.lua</code><br>
         Alles passiert lokal im Browser &ndash; es wird nichts hochgeladen.
       </p>
     </div>
@@ -116,16 +124,22 @@
     <div class="stats" id="stats"></div>
 
     <div class="tabs">
-      <button class="tab active" data-view="items">Pro Item</button>
-      <button class="tab" data-view="flips">Flip-Kandidaten</button>
-      <button class="tab" data-view="raw">Alle Auktionen</button>
+      <button class="tab" data-view="deals" data-mode="tsm">Deals</button>
+      <button class="tab" data-view="market" data-mode="tsm">Marktdaten</button>
+      <button class="tab" data-view="items" data-mode="dump">Pro Item</button>
+      <button class="tab" data-view="flips" data-mode="dump">Flip-Kandidaten</button>
+      <button class="tab" data-view="raw" data-mode="dump">Alle Auktionen</button>
       <button class="tab ghost" id="reset" style="margin-left:auto">Andere Datei</button>
     </div>
 
     <div class="controls">
-      <input type="search" id="q" placeholder="Item oder Verkaeufer suchen ...">
+      <input type="search" id="q" placeholder="Item oder ID suchen ...">
+      <label class="ctl hidden" id="ctlScope">Realm <select id="scope"></select></label>
+      <label class="ctl hidden" id="ctlMinSold">min. verkauft/Tag <input type="number" id="minSold" value="1" min="0" step="1"></label>
+      <label class="ctl hidden" id="ctlMinDiscount">min. Rabatt % <input type="number" id="minDiscount" value="25" min="0" step="5"></label>
       <label class="ctl hidden" id="ctlMinAuctions">min. Auktionen <input type="number" id="minAuctions" value="3" min="1" step="1"></label>
       <label class="ctl hidden" id="ctlMinMargin">min. Marge % <input type="number" id="minMargin" value="20" min="0" step="5"></label>
+      <button class="btn ghost hidden" id="loadNames">Item-Namen laden</button>
     </div>
 
     <div class="wrap"><table><thead id="thead"></thead><tbody id="tbody"></tbody></table></div>
@@ -142,7 +156,77 @@ var MAX_DISPLAY = 800;  // mehr Zeilen bringt im Browser nichts
 var TIME_LEFT = { 1: "< 30 Min", 2: "30 Min - 2 Std", 3: "2 - 12 Std", 4: "> 12 Std" };
 var DEFAULT_HEADER = "index,itemID,itemString,name,quality,count,minBid,buyout,bidAmount,owner,timeLeft,level,isCommodity";
 
-var state = { meta: {}, rows: [], items: [], view: "items", sort: { key: null, dir: 1 } };
+var NAME_URL = "https://nether.wowhead.com/classic/de/tooltip/item/";
+var NAME_CACHE_KEY = "ahflip.names";
+var NAME_PARALLEL = 6;
+var NAME_BATCH = 400;   // pro Klick, damit es nicht ewig dauert
+
+var state = {
+  mode: "dump",                 // "dump" = eigener Scan, "tsm" = AppData.lua
+  meta: {}, rows: [], items: [],
+  tsm: { blocks: [], scopes: [], scope: "", region: "", time: 0 },
+  shownIDs: [],
+  view: "items", sort: { key: null, dir: 1 }
+};
+
+/* ---------- Item-Namen (optional, von Wowhead) ---------- */
+
+var NAMES = (function () {
+  try { return JSON.parse(localStorage.getItem(NAME_CACHE_KEY)) || {}; }
+  catch (e) { return {}; }
+})();
+
+function saveNames() {
+  try { localStorage.setItem(NAME_CACHE_KEY, JSON.stringify(NAMES)); } catch (e) {}
+}
+
+function nameOf(itemID) {
+  var n = NAMES[itemID];
+  return n && n.n ? n.n : "";
+}
+
+function qualityOf(itemID) {
+  var n = NAMES[itemID];
+  return n && n.q != null ? n.q : null;
+}
+
+// Holt fehlende Namen fuer die gerade angezeigten Zeilen. Geht nur mit Internet,
+// und nur auf Klick - es wird ausschliesslich die Item-ID angefragt.
+function loadNames(ids, onProgress) {
+  var todo = [];
+  for (var i = 0; i < ids.length; i++) {
+    if (ids[i] && !NAMES[ids[i]]) todo.push(ids[i]);
+  }
+  if (!todo.length) return Promise.resolve({ done: 0, failed: 0, total: 0 });
+
+  var done = 0, failed = 0, pos = 0;
+
+  function next() {
+    if (pos >= todo.length) return Promise.resolve();
+    var id = todo[pos++];
+    return fetch(NAME_URL + id)
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (j) {
+        if (j && j.name) NAMES[id] = { n: j.name, q: j.quality == null ? 1 : j.quality };
+        else { NAMES[id] = { n: "", q: null }; failed++; }   // negativ cachen
+      })
+      .catch(function () { failed++; })
+      .then(function () {
+        done++;
+        if (onProgress) onProgress(done, todo.length);
+        // Wenn gleich die ersten Anfragen alle scheitern, ist kein Netz da
+        if (failed >= 5 && done === failed) throw new Error("Keine Verbindung zu wowhead.com");
+        return next();
+      });
+  }
+
+  var pool = [];
+  for (var p = 0; p < Math.min(NAME_PARALLEL, todo.length); p++) pool.push(next());
+  return Promise.all(pool).then(function () {
+    saveNames();
+    return { done: done, failed: failed, total: todo.length };
+  });
+}
 
 /* ---------- Helfer ---------- */
 
@@ -163,9 +247,17 @@ function esc(s) {
 }
 
 function itemCell(name, itemID, quality) {
+  var label = name || nameOf(itemID) || ("Item " + itemID);
+  if (quality == null) quality = qualityOf(itemID);
   var q = (quality >= 0 && quality <= 7) ? quality : 1;
-  var label = name || ("Item " + itemID);
-  return '<span class="q' + q + '">' + esc(label) + "</span>";
+  var inner = '<span class="q' + q + '">' + esc(label) + "</span>";
+  if (!itemID) return inner;
+  return '<a class="item" target="_blank" rel="noopener noreferrer" href="https://www.wowhead.com/classic/de/item=' +
+    itemID + '">' + inner + "</a>";
+}
+
+function dec(n, digits) {
+  return (n || 0).toLocaleString("de-DE", { minimumFractionDigits: digits, maximumFractionDigits: digits });
 }
 
 function median(sortedArr) {
@@ -259,6 +351,109 @@ function parseDump(text) {
   return { meta: meta, rows: rows };
 }
 
+/* ---------- TSM AppData.lua ---------- */
+
+// TSM speichert alle Zahlen base-32, grosse Werte in zwei Haelften.
+// Gleiche Logik wie LibTSMService/AuctionDB.lua: lower + upper * 2^30
+function b32(v) {
+  if (!v) return 0;
+  var n = v.length > 6
+    ? parseInt(v.slice(-6), 32) + parseInt(v.slice(0, -6), 32) * 1073741824
+    : parseInt(v, 32);
+  return isNaN(n) ? 0 : n;
+}
+
+// Realm-Daten gibt es je Realm-Fraktion, Commodity- und Regionsdaten gelten immer.
+var REALM_KEYS = { NON_COMMODITY_DATA: 1, NON_COMMODITY_SCAN_STAT: 1, NON_COMMODITY_HISTORICAL: 1 };
+var GLOBAL_KEYS = {
+  COMMODITY_DATA: 1, COMMODITY_SCAN_STAT: 1, COMMODITY_HISTORICAL: 1,
+  REGION_STAT: 1, REGION_HISTORICAL: 1, REGION_SALE: 1, REGION_COMMODITY: 1
+};
+
+function parseAppData(text) {
+  var blocks = [], scopes = [], region = "", time = 0;
+  var re = /LoadData\("([^"]+)","([^"]+)",\s*\[\[([\s\S]*?)\]\]\)/g, m;
+
+  while ((m = re.exec(text))) {
+    var key = m[1], scope = m[2], body = m[3];
+    if (key.indexOf("AUCTIONDB_") !== 0) continue;
+    key = key.slice("AUCTIONDB_".length);
+
+    var fm = body.match(/fields=\{([^}]*)\}/);
+    var di = body.indexOf(",data={");
+    if (!fm || di === -1) continue;
+
+    var fields = (fm[1].match(/"[^"]+"/g) || []).map(function (s) { return s.slice(1, -1); });
+    if (fields[0] !== "itemString") continue;
+
+    var dt = body.match(/downloadTime=(\d+)/);
+    var rows = [], rre = /\{"?([^,"{}]+)"?,([^}]*)\}/g, r;
+    var data = body.slice(di + 7);
+    while ((r = rre.exec(data))) rows.push([r[1], r[2]]);
+
+    blocks.push({ key: key, scope: scope, fields: fields, rows: rows, time: dt ? parseInt(dt[1], 10) : 0 });
+
+    if (REALM_KEYS[key]) {
+      if (scopes.indexOf(scope) === -1) scopes.push(scope);
+      if (key === "NON_COMMODITY_DATA") time = Math.max(time, blocks[blocks.length - 1].time);
+    } else if (key.indexOf("REGION_") === 0) {
+      region = scope;
+    }
+  }
+
+  scopes.sort();
+  return { blocks: blocks, scopes: scopes, region: region, time: time };
+}
+
+// Baut je Item eine Zeile aus Realm-Daten (gewaehlter Realm) + Regionsdaten.
+function buildTsmItems(tsm, scope) {
+  var map = new Map();
+
+  function slot(itemString) {
+    var it = map.get(itemString);
+    if (!it) {
+      var id = parseInt(String(itemString).replace(/^i:/, ""), 10) || 0;
+      it = { key: itemString, itemID: id, itemString: itemString, name: "", quality: null };
+      map.set(itemString, it);
+    }
+    return it;
+  }
+
+  tsm.blocks.forEach(function (b) {
+    var realm = REALM_KEYS[b.key];
+    if (realm && b.scope !== scope) return;
+    if (!realm && !GLOBAL_KEYS[b.key]) return;
+
+    for (var i = 0; i < b.rows.length; i++) {
+      var itemString = b.rows[i][0];
+      if (!/^\d/.test(itemString) && itemString.indexOf("i:") !== 0) continue;
+      var it = slot(itemString.indexOf("i:") === 0 ? itemString : "i:" + itemString);
+      var vals = b.rows[i][1].split(",");
+      for (var f = 1; f < b.fields.length; f++) {
+        var v = b32(vals[f - 1]);
+        if (v > 0) it[b.fields[f]] = v;        // 0 heisst bei TSM "keine Daten"
+      }
+      if (b.key.indexOf("COMMODITY") === 0) it.commodity = true;
+    }
+  });
+
+  var out = [];
+  map.forEach(function (it) {
+    it.minBuyout = it.minBuyout || 0;
+    it.numAuctions = it.numAuctions || 0;
+    // Referenzpreis: Realm-Marktwert, sonst der zuletzt gesehene, sonst Historie, sonst Region
+    it.market = it.marketValue || it.marketValueRecent || it.historical || it.regionMarketValue || 0;
+    it.soldPerDay = (it.regionSoldPerDay || 0) / 1000;      // TSM speichert * 1000
+    it.salePct = (it.regionSalePercent || 0) / 10;          // 903 -> 90,3 %
+    it.discount = (it.market > 0 && it.minBuyout > 0) ? (1 - it.minBuyout / it.market) * 100 : 0;
+    it.marginUnit = (it.market > 0 && it.minBuyout > 0) ? it.market * (1 - AH_CUT) - it.minBuyout : 0;
+    // Grobe Rangfolge: was bringt der Flip, wenn sich das Item auch verkauft
+    it.score = it.marginUnit > 0 ? it.marginUnit * it.soldPerDay : 0;
+    out.push(it);
+  });
+  return out;
+}
+
 /* ---------- Aggregation ---------- */
 
 function aggregate(rows) {
@@ -303,12 +498,61 @@ function aggregate(rows) {
 
 function matches(d, q) {
   if (!q) return true;
-  var name = (d.name || "").toLowerCase();
+  var name = (d.name || nameOf(d.itemID) || "").toLowerCase();
   var seller = (d.seller || d.owner || "").toLowerCase();
-  return name.indexOf(q) !== -1 || seller.indexOf(q) !== -1;
+  return name.indexOf(q) !== -1 || seller.indexOf(q) !== -1 || String(d.itemID) === q;
 }
 
 var VIEWS = {
+  /* --- TSM-Modus --- */
+
+  deals: {
+    cols: [
+      { key: "name",        label: "Item",            fmt: function (a) { return itemCell(a.name, a.itemID, a.quality); } },
+      { key: "minBuyout",   label: "Guenstigster",    num: true, fmt: function (a) { return money(a.minBuyout); } },
+      { key: "market",      label: "Marktwert",       num: true, fmt: function (a) { return money(a.market); } },
+      { key: "discount",    label: "Rabatt",          num: true, fmt: function (a) { return Math.round(a.discount) + " %"; } },
+      { key: "marginUnit",  label: "Marge / Stueck",  num: true, fmt: function (a) {
+          return '<span class="' + (a.marginUnit > 0 ? "pos" : "neg") + '">' + money(a.marginUnit) + "</span>"; } },
+      { key: "soldPerDay",  label: "verkauft / Tag",  num: true, fmt: function (a) { return dec(a.soldPerDay, 1); } },
+      { key: "salePct",     label: "Verkaufsrate",    num: true, fmt: function (a) { return a.salePct ? Math.round(a.salePct) + " %" : "-"; } },
+      { key: "numAuctions", label: "Auktionen",       num: true, fmt: function (a) { return a.numAuctions || "-"; } },
+      { key: "score",       label: "Potenzial / Tag", num: true, fmt: function (a) { return money(a.score); } }
+    ],
+    defaultSort: { key: "score", dir: -1 },
+    note: "Marge = Marktwert abzueglich 5 % Gebuehr minus Kaufpreis. " +
+          "Potenzial = Marge x regionsweite Verkaeufe pro Tag - nur eine Rangfolge, kein versprochener Gewinn. " +
+          "Alle Preise sind der Stand des letzten App-Scans, nicht das aktuelle Auktionshaus.",
+    data: function () {
+      var minSold = parseFloat(document.getElementById("minSold").value) || 0;
+      var minDisc = parseFloat(document.getElementById("minDiscount").value) || 0;
+      return state.items.filter(function (a) {
+        return a.minBuyout > 0 && a.market > 0 && a.marginUnit > 0 &&
+               a.discount >= minDisc && a.soldPerDay >= minSold;
+      });
+    }
+  },
+
+  market: {
+    cols: [
+      { key: "name",              label: "Item",           fmt: function (a) { return itemCell(a.name, a.itemID, a.quality); } },
+      { key: "itemID",            label: "ID",             num: true, fmt: function (a) { return a.itemID || "-"; } },
+      { key: "minBuyout",         label: "Guenstigster",   num: true, fmt: function (a) { return a.minBuyout ? money(a.minBuyout) : "-"; } },
+      { key: "numAuctions",       label: "Auktionen",      num: true, fmt: function (a) { return a.numAuctions || "-"; } },
+      { key: "marketValue",       label: "Marktwert",      num: true, fmt: function (a) { return a.marketValue ? money(a.marketValue) : "-"; } },
+      { key: "marketValueRecent", label: "zuletzt",        num: true, fmt: function (a) { return a.marketValueRecent ? money(a.marketValueRecent) : "-"; } },
+      { key: "historical",        label: "Historie",       num: true, fmt: function (a) { return a.historical ? money(a.historical) : "-"; } },
+      { key: "regionMarketValue", label: "Region-Markt",   num: true, fmt: function (a) { return a.regionMarketValue ? money(a.regionMarketValue) : "-"; } },
+      { key: "regionSale",        label: "Region-Verkauf", num: true, fmt: function (a) { return a.regionSale ? money(a.regionSale) : "-"; } },
+      { key: "soldPerDay",        label: "verkauft / Tag", num: true, fmt: function (a) { return dec(a.soldPerDay, 1); } },
+      { key: "salePct",           label: "Verkaufsrate",   num: true, fmt: function (a) { return a.salePct ? Math.round(a.salePct) + " %" : "-"; } }
+    ],
+    defaultSort: { key: "soldPerDay", dir: -1 },
+    data: function () { return state.items; }
+  },
+
+  /* --- eigener Dump --- */
+
   items: {
     cols: [
       { key: "name",     label: "Item",      fmt: function (a) { return itemCell(a.name, a.itemID, a.quality); } },
@@ -372,8 +616,12 @@ function render() {
   var sortKey = state.sort.key || view.defaultSort.key;
   var dir = state.sort.key ? state.sort.dir : view.defaultSort.dir;
 
+  var valueOf = function (o) {
+    return sortKey === "name" ? (o.name || nameOf(o.itemID) || "") : o[sortKey];
+  };
+
   data = data.slice().sort(function (a, b) {
-    var x = a[sortKey], y = b[sortKey];
+    var x = valueOf(a), y = valueOf(b);
     if (typeof x === "string" || typeof y === "string") {
       return String(x == null ? "" : x).localeCompare(String(y == null ? "" : y), "de") * dir;
     }
@@ -386,6 +634,7 @@ function render() {
   }).join("") + "</tr>";
 
   var shown = data.slice(0, MAX_DISPLAY);
+  state.shownIDs = shown.map(function (d) { return d.itemID; });
   var html = [];
   for (var i = 0; i < shown.length; i++) {
     var cells = "";
@@ -397,16 +646,56 @@ function render() {
   }
   document.getElementById("tbody").innerHTML = html.join("");
 
-  document.getElementById("footnote").textContent = data.length > MAX_DISPLAY
+  var foot = data.length > MAX_DISPLAY
     ? "Zeigt " + MAX_DISPLAY + " von " + data.length.toLocaleString("de-DE") + " Zeilen - weiter eingrenzen oder anders sortieren."
     : data.length.toLocaleString("de-DE") + " Zeilen.";
+  if (view.note) foot += "  " + view.note;
+  document.getElementById("footnote").textContent = foot;
 
-  var isFlip = state.view === "flips";
-  document.getElementById("ctlMinAuctions").classList.toggle("hidden", !isFlip);
-  document.getElementById("ctlMinMargin").classList.toggle("hidden", !isFlip);
+  var isTsm = state.mode === "tsm";
+  toggle("ctlMinAuctions", state.view === "flips");
+  toggle("ctlMinMargin", state.view === "flips");
+  toggle("ctlScope", isTsm && state.tsm.scopes.length > 1);
+  toggle("ctlMinSold", state.view === "deals");
+  toggle("ctlMinDiscount", state.view === "deals");
+  toggle("loadNames", isTsm);
+}
+
+function toggle(id, show) {
+  document.getElementById(id).classList.toggle("hidden", !show);
+}
+
+function showStats(stats) {
+  document.getElementById("stats").innerHTML = stats.map(function (s) {
+    return '<div class="stat"><div class="k">' + s[0] + '</div><div class="v">' + s[1] + "</div></div>";
+  }).join("");
+}
+
+function renderTsmStats() {
+  var withPrice = 0, withSales = 0, named = 0, i;
+  for (i = 0; i < state.items.length; i++) {
+    if (state.items[i].minBuyout > 0) withPrice++;
+    if (state.items[i].soldPerDay > 0) withSales++;
+    if (nameOf(state.items[i].itemID)) named++;
+  }
+  var age = state.tsm.time ? Math.round((Date.now() / 1000 - state.tsm.time) / 60) : null;
+
+  showStats([
+    ["Items", state.items.length.toLocaleString("de-DE")],
+    ["im AH gesehen", withPrice.toLocaleString("de-DE")],
+    ["mit Verkaufsdaten", withSales.toLocaleString("de-DE")],
+    ["Realm", esc(state.tsm.scope || "?")],
+    ["Region", esc(state.tsm.region || "?")],
+    ["Stand", state.tsm.time
+      ? new Date(state.tsm.time * 1000).toLocaleString("de-DE") + (age != null ? " (" + age + " Min)" : "")
+      : "?"],
+    ["Namen", named.toLocaleString("de-DE") + " / " + state.items.length.toLocaleString("de-DE")]
+  ]);
 }
 
 function renderStats() {
+  if (state.mode === "tsm") return renderTsmStats();
+
   var withBuyout = 0, totalValue = 0, unknownCommodity = 0;
   for (var i = 0; i < state.rows.length; i++) {
     var r = state.rows[i];
@@ -432,15 +721,52 @@ function renderStats() {
 
 /* ---------- Laden ---------- */
 
+function setMode(mode) {
+  var first = null;
+  Array.prototype.forEach.call(document.querySelectorAll(".tab[data-view]"), function (tab) {
+    var fits = tab.getAttribute("data-mode") === mode;
+    tab.classList.toggle("hidden", !fits);
+    tab.classList.remove("active");
+    if (fits && !first) first = tab;
+  });
+  if (first) {
+    first.classList.add("active");
+    state.view = first.getAttribute("data-view");
+  }
+}
+
+function fillScopes() {
+  var sel = document.getElementById("scope");
+  sel.innerHTML = state.tsm.scopes.map(function (s) {
+    return '<option value="' + esc(s) + '">' + esc(s) + "</option>";
+  }).join("");
+  sel.value = state.tsm.scope;
+}
+
 function load(text) {
   var err = document.getElementById("err");
   try {
-    var parsed = parseDump(text);
-    if (!parsed.rows.length) throw new Error("Keine Auktionen in der Datei gefunden.");
-    state.meta = parsed.meta;
-    state.rows = parsed.rows;
-    state.items = aggregate(parsed.rows);
+    if (text.indexOf("LoadData(") !== -1) {
+      var tsm = parseAppData(text);
+      if (!tsm.blocks.length) throw new Error("Keine AuctionDB-Daten in der Datei gefunden.");
+      if (!tsm.scopes.length) throw new Error("Keine Realm-Daten - laeuft die TSM Desktop App und ist ein Realm ausgewaehlt?");
+      state.mode = "tsm";
+      state.tsm = tsm;
+      state.tsm.scope = tsm.scopes[0];
+      state.meta = {};
+      state.rows = [];
+      state.items = buildTsmItems(tsm, state.tsm.scope);
+      fillScopes();
+    } else {
+      var parsed = parseDump(text);
+      if (!parsed.rows.length) throw new Error("Keine Auktionen in der Datei gefunden.");
+      state.mode = "dump";
+      state.meta = parsed.meta;
+      state.rows = parsed.rows;
+      state.items = aggregate(parsed.rows);
+    }
     state.sort = { key: null, dir: 1 };
+    setMode(state.mode);
     err.classList.add("hidden");
     document.getElementById("loader").classList.add("hidden");
     document.getElementById("app").classList.remove("hidden");
@@ -499,8 +825,46 @@ document.getElementById("thead").addEventListener("click", function (e) {
   render();
 });
 
-["q", "minAuctions", "minMargin"].forEach(function (id) {
+["q", "minAuctions", "minMargin", "minSold", "minDiscount"].forEach(function (id) {
   document.getElementById(id).addEventListener("input", render);
+});
+
+document.getElementById("scope").addEventListener("change", function () {
+  state.tsm.scope = this.value;
+  state.items = buildTsmItems(state.tsm, state.tsm.scope);
+  renderStats();
+  render();
+});
+
+document.getElementById("loadNames").addEventListener("click", function () {
+  var btn = this, foot = document.getElementById("footnote");
+  var ids = state.shownIDs.slice(0, NAME_BATCH);
+  var label = btn.textContent;
+
+  btn.disabled = true;
+  btn.textContent = "laedt ...";
+  foot.textContent = "Item-Namen werden von wowhead.com geladen ...";
+
+  loadNames(ids, function (done, total) {
+    foot.textContent = "Item-Namen werden von wowhead.com geladen ... " + done + " / " + total;
+  }).then(function (r) {
+    saveNames();
+    renderStats();
+    render();
+    foot.textContent = r.total === 0
+      ? "Alle angezeigten Namen sind bereits bekannt."
+      : "Namen geladen: " + (r.total - r.failed) + " von " + r.total +
+        (state.shownIDs.length > NAME_BATCH ? " - fuer den Rest nochmal klicken." : "");
+  }).catch(function (e) {
+    saveNames();
+    renderStats();
+    render();
+    foot.textContent = "Namen laden fehlgeschlagen (" + e.message +
+      "). Dafuer braucht die Seite Internet; die Daten selbst bleiben lokal.";
+  }).then(function () {
+    btn.disabled = false;
+    btn.textContent = label;
+  });
 });
 
 document.getElementById("reset").addEventListener("click", function () {

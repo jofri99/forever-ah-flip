@@ -1,30 +1,96 @@
 # Forever AH Flip
 
-Auktionshaus-Daten aus **World of Warcraft: Forever** in eine Datei schreiben, ansehen und
-nach Flip-Gelegenheiten durchsuchen.
+Auktionshausdaten aus **World of Warcraft: Forever** auswerten - im Browser, ohne Installation,
+ohne Upload.
 
-Drei Teile, die unabhaengig voneinander funktionieren:
+Zwei Datenquellen, die sich ergaenzen:
+
+| Quelle | Was sie liefert |
+|---|---|
+| **TSM Desktop App** (`AppData.lua`) | Marktwerte, Historie und vor allem *Verkaeufe pro Tag* fuer ~7.000 Items. Laeuft stuendlich von allein. |
+| **Eigener Scan** (`addon/AHDump`) | Jede einzelne Auktion live: Verkaeufer, Stackgroesse, Restzeit. Nur wenn man selbst am Auktionator steht. |
 
 | Teil | Was es macht |
 |---|---|
-| `addon/AHDump` | In-Game-Addon. `/ahdump` macht einen Full-Scan des Auktionshauses und legt ihn in den SavedVariables ab. |
-| `viewer/index.html` | Einzelne HTML-Datei. Zeigt den Dump als sortierbare Tabelle und rechnet Flip-Kandidaten aus. Laeuft offline im Browser. |
+| `viewer/index.html` | Einzelne HTML-Datei. Liest beide Formate, zeigt sortierbare Tabellen und Deal-Listen. |
+| `addon/AHDump` | In-Game-Addon. `/ahdump` macht einen Full-Scan des Auktionshauses. |
 | `tools/Convert-AHDump.ps1` | Optional: macht aus `AHDump.lua` eine CSV fuer Excel, Pandas & Co. |
 
-## Technischer Hintergrund
+## Schnellstart mit TSM-Daten
+
+Wer die TSM Desktop App laufen hat, braucht sonst nichts:
+
+1. `viewer/index.html` im Browser oeffnen
+2. `Interface\AddOns\TradeSkillMaster_AppHelper\AppData.lua` hineinziehen
+
+Die App schreibt diese Datei etwa stuendlich neu - einfach erneut hineinziehen.
+
+### Was in AppData.lua steht
+
+Pro Realm-Fraktion (also nur dort, wo man Chars hat) und pro Region:
+
+| Feld | Bedeutung |
+|---|---|
+| `minBuyout` | guenstigster Sofortkauf beim letzten Scan |
+| `numAuctions` | Anzahl Auktionen beim letzten Scan |
+| `marketValue` / `marketValueRecent` | Marktwert des Realms |
+| `historical` | Mittelwert ueber die letzten Wochen |
+| `regionMarketValue` / `regionHistorical` | dasselbe regionsweit |
+| `regionSale`, `regionSoldPerDay`, `regionSalePercent` | tatsaechliche Verkaeufe: Durchschnittspreis, Stueck pro Tag, Anteil der Auktionen, die verkauft werden |
+
+Die Zahlen liegen base-32-kodiert vor (grosse Werte zweigeteilt, `lower + upper * 2^30`), der
+Viewer dekodiert sie wie TSM selbst. `regionSoldPerDay` und `regionSalePercent` sind mit 1000
+multipliziert gespeichert.
+
+### Ansicht "Deals"
+
+Items, deren guenstigstes Angebot deutlich unter dem Marktwert liegt **und** die sich auch
+verkaufen:
+
+```
+Marge pro Stueck = Marktwert * 0,95 - guenstigster Sofortkauf
+Rabatt           = 1 - guenstigster Sofortkauf / Marktwert
+Potenzial        = Marge pro Stueck * Verkaeufe pro Tag (Region)
+```
+
+Das Potenzial ist nur eine Rangfolge, kein versprochener Gewinn - es unterstellt, man wuerde
+den gesamten Regionsumsatz selbst machen. Nuetzlich ist es trotzdem: 300 % Marge auf etwas,
+das zweimal im Monat verkauft wird, ist kein Geschaeft.
+
+Ueber `min. verkauft/Tag` und `min. Rabatt %` laesst sich filtern.
+
+### Grenzen der TSM-Daten
+
+- **Keine einzelnen Auktionen.** `minBuyout` ist eine Zahl pro Item. Man weiss, dass etwas
+  guenstig *war* - nicht von wem, in welcher Stackgroesse, wie lange noch.
+- **Bis zu eine Stunde alt.** Die Kopfzeile zeigt den Stand des letzten Scans.
+- **Nur eigene Realms und Fraktionen.** Wo man keinen Char hat, gibt es keine Daten.
+- Verkaufszahlen gibt es nur regionsweit, nicht pro Realm.
+
+### Item-Namen
+
+TSM speichert nur Item-IDs. Der Knopf **Item-Namen laden** holt die Namen fuer die gerade
+angezeigten Zeilen von `wowhead.com` (nur die Item-ID geht raus) und legt sie im
+`localStorage` ab. Das ist der einzige Netzzugriff der Seite und passiert nur auf Klick -
+ohne ihn steht in der Spalte `Item 12359`, der Link zu Wowhead funktioniert trotzdem.
+Items, die es nur in Forever gibt, kennt Wowhead nicht.
+
+## Eigener Scan
+
+### Technischer Hintergrund
 
 Forever (`WOW_PROJECT_CAMELOT`, Interface **16001**) nutzt die **moderne** UI-Architektur von
-Mainline, nicht die von Classic Era. Das Auktionshaus laeuft also ueber `C_AuctionHouse` inklusive
-Commodities - und damit ueber `C_AuctionHouse.ReplicateItems()`, den vollstaendigen AH-Abzug in
-einem Rutsch. Addons fuer Classic Era (Interface 11500er) funktionieren hier nicht.
+Mainline, nicht die von Classic Era. Das Auktionshaus laeuft also ueber `C_AuctionHouse` und
+damit ueber `C_AuctionHouse.ReplicateItems()`, den vollstaendigen AH-Abzug in einem Rutsch.
+Addons fuer Classic Era (Interface 11500er) funktionieren hier nicht.
 
-## Addon installieren
+### Addon installieren
 
 1. Ordner `addon/AHDump` nach `<WoW>\_forever_\Interface\AddOns\AHDump` kopieren
 2. WoW **neu starten** - ein neu angelegtes Addon wird von `/reload` nicht erkannt
 3. In der Addon-Liste aktivieren
 
-## Dump erstellen
+### Dump erstellen
 
 ```
 1. Zum Auktionator gehen, Auktionshaus oeffnen
@@ -32,7 +98,8 @@ einem Rutsch. Addons fuer Classic Era (Interface 11500er) funktionieren hier nic
 3. /reload          -> erst jetzt schreibt WoW die Datei
 ```
 
-Ergebnis: `<WoW>\_forever_\WTF\Account\<ACCOUNT>\SavedVariables\AHDump.lua`
+Ergebnis: `<WoW>\_forever_\WTF\Account\<ACCOUNT>\SavedVariables\AHDump.lua` - ebenfalls in den
+Viewer ziehen.
 
 Weitere Befehle:
 
@@ -43,35 +110,21 @@ Weitere Befehle:
 alle ca. 15 Minuten. Kommt nach zwei Minuten keine Antwort, meldet das Addon das und man
 versucht es spaeter erneut.
 
-## Daten ansehen
-
-`viewer/index.html` im Browser oeffnen und die `AHDump.lua` hineinziehen - die CSV geht
-genauso. Es wird nichts hochgeladen, die Datei wird lokal im Browser gelesen.
-
-Drei Ansichten:
+### Ansichten
 
 - **Pro Item** - ein Eintrag je Item: Anzahl Auktionen, Gesamtmenge, guenstigster Stueckpreis, Median
-- **Flip-Kandidaten** - Items, bei denen das guenstigste Angebot deutlich unter dem Marktpreis liegt
+- **Flip-Kandidaten** - Items, bei denen das guenstigste Angebot unter dem Median der uebrigen liegt
 - **Alle Auktionen** - der rohe Dump, sortier- und durchsuchbar
 
-### Wie die Flip-Marge gerechnet wird
-
-Pro Item werden alle Stueckpreise sortiert. Der **Marktpreis** ist der Median *ohne* das
-guenstigste Angebot - das ist ja genau das, was man selbst kaufen will. Davon gehen 5 %
-Auktionshaus-Gebuehr ab:
-
 ```
-Marge pro Stueck = Marktpreis * 0,95 - guenstigster Stueckpreis
-Gewinn           = Marge pro Stueck * Menge im guenstigsten Angebot
+Marktpreis = Median der Stueckpreise ohne das guenstigste Angebot
+Marge      = Marktpreis * 0,95 - guenstigster Stueckpreis
 ```
 
-Ueber `min. Auktionen` und `min. Marge %` laesst sich filtern. Sinnvoll sind mindestens
-3-5 Auktionen pro Item, sonst ist der "Markt" nur ein einzelner Mitspieler.
+Das ist bewusst eine einfache Heuristik und sagt nichts darueber, ob sich ein Item auch
+verkauft - dafuer sind die TSM-Daten da.
 
-Das ist bewusst eine einfache Heuristik. Sie sagt nichts darueber, ob sich ein Item auch
-tatsaechlich verkauft, und ein Dump ist immer nur eine Momentaufnahme.
-
-## Datenformat
+### Datenformat
 
 Eine Zeile je Auktion, Preise in **Kupfer**:
 
@@ -91,10 +144,12 @@ Eine Zeile je Auktion, Preise in **Kupfer**:
 | `level` | Itemlevel bzw. benoetigtes Level |
 | `isCommodity` | 1 = Stapelware, `buyout` ist ein **Stueckpreis**; 0 = normale Auktion, `buyout` gilt fuer den **ganzen Stack**; leer = unbekannt |
 
-`isCommodity` ist wichtig: ohne diese Unterscheidung ist jeder Preisvergleich bei
-Stapelware falsch. Der Viewer rechnet entsprechend `buyout` bzw. `buyout / count`.
+In Forever scheint es praktisch keine Commodities zu geben: Leinenstoff, Kupfererz, Heiltraenke
+und der ganze Rest liegen bei TSM unter `NON_COMMODITY`, der Commodity-Datensatz ist leer.
+`isCommodity` duerfte also durchgehend 0 sein - die Spalte bleibt trotzdem drin, falls sich das
+noch aendert.
 
-## CSV erzeugen (optional)
+### CSV erzeugen (optional)
 
 ```powershell
 .\tools\Convert-AHDump.ps1
@@ -111,3 +166,5 @@ Mit `-Path` / `-WowPath` / `-Out` laesst sich alles explizit angeben.
 - Der Viewer zeigt maximal 800 Zeilen gleichzeitig; weiter eingrenzen oder anders sortieren.
 - Ein voller Dump kann je nach Realm zweistellige MB erreichen. `data/` ist deshalb in
   `.gitignore`.
+- Wer nur *im Spiel* Schnaeppchen sucht, ist mit TSM Sniper/Shopping besser bedient. Der Sinn
+  hier ist die Auswertung ausserhalb des Spiels.
