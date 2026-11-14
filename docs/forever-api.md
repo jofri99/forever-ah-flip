@@ -116,19 +116,19 @@ im Pfad filtert nichts. Fuer den Sammler heisst das: **15 Haeuser einmal abrufen
 
 ## Groesse und Takt
 
-- Ein grosses Haus: rund 13 MB gzip, in 0,4 s geladen.
-- Alle 15 Haeuser, nur Auktionen: rund 62 MB. Mit Stapelware etwa das Doppelte.
-- `last-modified` ist der Stand, den Blizzard gebaut hat - bei der Messung
-  `Sat, 14 Nov 2026 18:19:11 GMT`, rund 50 Minuten alt. Die grossen Haeuser tragen jeweils
-  eigene Sekunden, die leeren einen aelteren Stand.
-- `cache-control: public, max-age=86400` steht im Widerspruch dazu. **Noch offen:** in
-  welchem Takt sich `last-modified` wirklich bewegt. Der Sammler soll den Wert bei jedem
-  Lauf mitschreiben, dann weiss man es nach einem Tag.
+- Ein grosses Haus: rund 13 MB, in 0,4 s geladen. Alle 15 Haeuser, nur Auktionen: rund 62 MB.
+- Haus 114 vollstaendig, also mit Stapelware: 141.833 Auktionen und 124.465 Commodity-Zeilen,
+  23,1 MB, vom Abruf bis zur fertigen Parquet-Datei 3,4 Sekunden.
+- **Der Takt ist stuendlich.** Gemessen an Haus 114: `Sat, 14 Nov 2026 18:19:10 GMT`, dann
+  `19:19:11`. Die Haeuser werden Sekunden auseinander gebaut, immer um :19.
+- `cache-control: public, max-age=86400` ist irrefuehrend und hat mit dem Takt nichts zu tun.
+- **`If-Modified-Since` wird respektiert.** Mit dem letzten bekannten Wert kommt `304` und
+  null Bytes zurueck. Ein Durchlauf ohne neue Daten kostet damit nichts - der Cron darf
+  oefter laufen als einmal die Stunde, ohne 23 MB zu verschwenden.
 - `battlenet-schema: auctions`, Revision 1.
 
 ## Offene Punkte
 
-- Takt der Aktualisierung (siehe oben).
-- Ob `If-Modified-Since` respektiert wird und damit unveraenderte Haeuser ohne Download
-  erkannt werden koennen.
 - Welches der beiden Rollenspiel-Rulesets zu den Haeusern 119-121 und 123-125 gehoert.
+- Ob der Stundentakt auch nachts und bei Wartungsarbeiten haelt. Das Lauf-Protokoll in
+  `data/warehouse/runs.parquet` beantwortet das nach ein paar Tagen von selbst.

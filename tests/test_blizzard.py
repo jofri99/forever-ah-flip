@@ -143,6 +143,17 @@ def test_gives_up_after_retries() -> None:
     assert len(delays) == 2
 
 
+def test_if_modified_since_is_sent_and_304_comes_back() -> None:
+    session = FakeSession([token_ok()], [FakeResponse(304)])
+    client = make_client(session)
+
+    response = client.auctions(2, 114, if_modified_since="Sat, 14 Nov 2026 19:19:11 GMT")
+
+    assert session.get_calls[0]["headers"]["If-Modified-Since"] == "Sat, 14 Nov 2026 19:19:11 GMT"
+    assert response.status == 304
+    assert not response.ok
+
+
 def test_404_is_returned_not_raised() -> None:
     session = FakeSession([token_ok()], [FakeResponse(404, {"detail": "Not Found"})])
     client = make_client(session)

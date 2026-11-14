@@ -36,9 +36,52 @@ sagt also nur mit Token etwas aus. Genau dafuer gibt es `verify`.
 
 Was die API tatsaechlich liefert - Rulesets, alle 15 Auktionshaeuser mit Fraktion und
 Groesse, die Felder einer Auktion, Stapelware, Antwortzeiten - steht gemessen in
-[`docs/forever-api.md`](docs/forever-api.md). Kurz: 15 Haeuser, rund 62 MB je Durchlauf,
-`quantity` ist bei normalen Auktionen immer 1, Stapelware liegt auf einem eigenen Endpunkt,
-und die Ruleset-ID im Pfad filtert nichts.
+[`docs/forever-api.md`](docs/forever-api.md). Kurz: `quantity` ist bei normalen Auktionen
+immer 1, Stapelware liegt auf einem eigenen Endpunkt, die Ruleset-ID im Pfad filtert nichts,
+und die Daten werden stuendlich um :19 neu gebaut.
+
+### Gesammelt wird ein Haus
+
+**Haus 114, Auktionshaus der Horde im Ruleset Normal** - PvE Horde. Aenderbar ueber
+`FOREVER_HOUSE` in der `.env`.
+
+```powershell
+python -m collector collect
+```
+
+Ein Durchlauf holt Auktionen und Stapelware, verdichtet beides und legt es ab:
+
+```
+data/warehouse/
+  items/dt=2026-11-14.parquet   je Stand und Item eine Zeile: Angebote, Menge,
+                                guenstigster Preis, p25, Median, Warenwert, Gebote
+  sales/dt=2026-11-14.parquet   je Stand und Item: verkauft, abgelaufen, unklar, neu
+  state/snapshot.parquet        die rohe Momentaufnahme, nur bis zum naechsten Lauf
+  runs.parquet                  Protokoll: wann, welcher Stand, wie viele Zeilen
+```
+
+266.000 Auktionen werden so zu 6.228 Zeilen und 99 KB je Stand, also rund 2,4 MB am Tag.
+Die rohen Einzelauktionen bleiben nicht liegen - sie werden nur gebraucht, um zwei
+aufeinanderfolgende Staende zu vergleichen.
+
+Laeuft der Sammler, obwohl es nichts Neues gibt, schickt er `If-Modified-Since` und bekommt
+`304` zurueck: kein Download, 1 Sekunde. Der Cron darf also ruhig alle zehn Minuten laufen.
+
+### Wie Verkaeufe entstehen
+
+Auktionen haben IDs. Verschwindet eine zwischen zwei Staenden, wird sie danach eingeordnet,
+wie viel Restzeit sie zuletzt hatte:
+
+| zuletzt gesehen | Restzeit | nach einer Stunde verschwunden |
+|---|---|---|
+| `VERY_LONG` | ueber 12 h | **verkauft** - ablaufen konnte sie nicht |
+| `LONG` | 2 bis 12 h | **verkauft** |
+| `MEDIUM` | 30 min bis 2 h | **unklar** - koennte auch abgelaufen sein |
+| `SHORT` | unter 30 min | **abgelaufen** |
+
+Die Grenzen haengen am Abstand der Staende: liegen drei Stunden dazwischen, zaehlt `LONG`
+nicht mehr als verkauft. Stornierte Auktionen sind von gekauften nicht zu unterscheiden und
+laufen unter "verkauft" mit.
 
 Warum nicht weiter TSM: dessen Daten sind Aggregate je Item, nur fuer die eigenen
 Realm-Fraktionen und bis zu eine Stunde alt. Die API liefert jede Auktion mit ihrer ID - und

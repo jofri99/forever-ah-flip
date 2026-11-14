@@ -45,6 +45,8 @@ class Settings:
     region: str = "eu"
     locale: str = "de_DE"
     rulesets: tuple[int, ...] = (1, 2, 3, 15)
+    ruleset: int = 2            # Normal; die ID im Pfad filtert ohnehin nichts
+    house: int = 114            # Auktionshaus der Horde, Normal-Ruleset (gemessen)
     data_dir: Path = field(default=ROOT / "data")
 
     @classmethod
@@ -67,6 +69,8 @@ class Settings:
             region=region,
             locale=env.get("BLIZZARD_LOCALE", "de_DE").strip(),
             rulesets=rulesets,
+            ruleset=int(env.get("FOREVER_RULESET", "2")),
+            house=int(env.get("FOREVER_HOUSE", "114")),
             data_dir=data_dir,
         )
 

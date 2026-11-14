@@ -119,11 +119,12 @@ class BlizzardClient:
         *,
         namespace: str = "dynamic",
         params: dict[str, Any] | None = None,
+        headers: dict[str, str] | None = None,
         stream_to: Path | None = None,
         retries: int = 3,
         timeout: float = 120.0,
     ) -> ApiResponse:
-        """Ein GET gegen die API. 404 wird zurueckgegeben, nicht geworfen."""
+        """Ein GET gegen die API. 404 und 304 werden zurueckgegeben, nicht geworfen."""
         url = f"{self.settings.api_host}{path}"
         query = {
             "namespace": self.settings.namespace(namespace),
@@ -136,10 +137,16 @@ class BlizzardClient:
         refreshed = False
         while True:
             attempt += 1
-            headers = {"Authorization": f"Bearer {self.token()}"}
+            request_headers = {"Authorization": f"Bearer {self.token()}"}
+            if headers:
+                request_headers.update(headers)
             started = time.perf_counter()
             response = self.session.get(
-                url, params=query, headers=headers, timeout=timeout, stream=stream_to is not None
+                url,
+                params=query,
+                headers=request_headers,
+                timeout=timeout,
+                stream=stream_to is not None,
             )
             status = response.status_code
 
@@ -219,10 +226,28 @@ class BlizzardClient:
         # Der Schraegstrich am Ende ist noetig, ohne ihn kommt 404.
         return self.get(f"/data/wow/ruleset/{ruleset_id}/auctions/")
 
-    def auctions(self, ruleset_id: int, house_id: int, stream_to: Path | None = None) -> ApiResponse:
-        return self.get(f"/data/wow/ruleset/{ruleset_id}/auctions/{house_id}", stream_to=stream_to)
-
-    def commodities(self, ruleset_id: int, house_id: int, stream_to: Path | None = None) -> ApiResponse:
+    def auctions(
+        self,
+        ruleset_id: int,
+        house_id: int,
+        stream_to: Path | None = None,
+        if_modified_since: str | None = None,
+    ) -> ApiResponse:
         return self.get(
-            f"/data/wow/ruleset/{ruleset_id}/auctions/{house_id}/commodities", stream_to=stream_to
+            f"/data/wow/ruleset/{ruleset_id}/auctions/{house_id}",
+            stream_to=stream_to,
+            headers={"If-Modified-Since": if_modified_since} if if_modified_since else None,
+        )
+
+    def commodities(
+        self,
+        ruleset_id: int,
+        house_id: int,
+        stream_to: Path | None = None,
+        if_modified_since: str | None = None,
+    ) -> ApiResponse:
+        return self.get(
+            f"/data/wow/ruleset/{ruleset_id}/auctions/{house_id}/commodities",
+            stream_to=stream_to,
+            headers={"If-Modified-Since": if_modified_since} if if_modified_since else None,
         )
