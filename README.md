@@ -32,7 +32,13 @@ hat keine Realms, sondern Rulesets, und je Ruleset 15 Auktionshaeuser:
 
 Die Pfade sind von der Community kartiert, nicht von Blizzard dokumentiert. **Ohne gueltigen
 Token antwortet die API auf jeden Pfad mit 404** - auch auf Pfade, die es sicher gibt. Ein 404
-sagt also nur mit Token etwas aus. Genau dafuer gibt es `verify`, siehe unten.
+sagt also nur mit Token etwas aus. Genau dafuer gibt es `verify`.
+
+Was die API tatsaechlich liefert - Rulesets, alle 15 Auktionshaeuser mit Fraktion und
+Groesse, die Felder einer Auktion, Stapelware, Antwortzeiten - steht gemessen in
+[`docs/forever-api.md`](docs/forever-api.md). Kurz: 15 Haeuser, rund 62 MB je Durchlauf,
+`quantity` ist bei normalen Auktionen immer 1, Stapelware liegt auf einem eigenen Endpunkt,
+und die Ruleset-ID im Pfad filtert nichts.
 
 Warum nicht weiter TSM: dessen Daten sind Aggregate je Item, nur fuer die eigenen
 Realm-Fraktionen und bis zu eine Stunde alt. Die API liefert jede Auktion mit ihrer ID - und
@@ -167,10 +173,10 @@ Eine Zeile je Auktion, Preise in **Kupfer**:
 | `level` | Itemlevel bzw. benoetigtes Level |
 | `isCommodity` | 1 = Stapelware, `buyout` ist ein **Stueckpreis**; 0 = normale Auktion, `buyout` gilt fuer den **ganzen Stack**; leer = unbekannt |
 
-In Forever scheint es praktisch keine Commodities zu geben: Leinenstoff, Kupfererz, Heiltraenke
-und der ganze Rest liegen bei TSM unter `NON_COMMODITY`, der Commodity-Datensatz ist leer.
-`isCommodity` duerfte also durchgehend 0 sein - die Spalte bleibt trotzdem drin, falls sich das
-noch aendert.
+`isCommodity` ist wichtiger, als es zuerst aussah. TSMs `AppData.lua` hat einen leeren
+Commodity-Datensatz, was nach "Forever kennt keine Stapelware" aussieht - die Battle.net-API
+zeigt aber allein in einem Auktionshaus 129.321 Commodity-Auktionen. Der leere Datensatz ist
+eine Eigenart von TSM, keine Eigenschaft des Spiels.
 
 ### CSV erzeugen (optional)
 

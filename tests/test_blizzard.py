@@ -161,6 +161,20 @@ def test_bad_credentials_raise_auth_error() -> None:
         client.token()
 
 
+def test_last_modified_is_read_case_insensitively() -> None:
+    # Die API schickt den Header klein geschrieben.
+    session = FakeSession(
+        [token_ok()],
+        [FakeResponse(200, {"id": 2}, {"last-modified": "Sat, 14 Nov 2026 18:19:11 GMT"})],
+    )
+    client = make_client(session)
+
+    response = client.ruleset(2)
+
+    assert response.last_modified == "Sat, 14 Nov 2026 18:19:11 GMT"
+    assert response.header("CACHE-CONTROL") is None
+
+
 def test_stream_writes_file_and_reports_size(tmp_path: Path) -> None:
     payload = {"auctions": [{"id": 1, "item": {"id": 2589}, "buyout": 400, "quantity": 20}]}
     session = FakeSession([token_ok()], [FakeResponse(200, payload, {"Last-Modified": "Fri, 14 Nov 2026 18:00:00 GMT"})])

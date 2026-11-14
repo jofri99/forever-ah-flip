@@ -140,48 +140,56 @@ def run(settings: Settings, ruleset_hint: int | None = None, keep_raw: bool = Fa
 
             payload = json.loads(destination.read_text(encoding="utf-8"))
             auctions = payload.get("auctions") or []
-            commodities = payload.get("commodities") or []
             example = auctions[0] if auctions else None
+            house_name = _localized(payload.get("name"), settings.locale)
+            quantities = sorted({a.get("quantity") for a in auctions})[:4]
 
             report["sample"][str(house_id)] = {
                 "status": response.status,
+                "name": house_name,
                 "bytes": response.size,
                 "auctions": len(auctions),
-                "commodities_inline": len(commodities),
+                "items": len({a["item"]["id"] for a in auctions if isinstance(a.get("item"), dict)}),
+                "quantities": quantities,
                 "last_modified": response.last_modified,
                 "fields": sorted(example) if isinstance(example, dict) else None,
                 "example": example,
             }
             _line(
                 OK,
-                f"Haus {house_id}: {len(auctions):>6} Auktionen, {_size(response.size)}, "
-                f"{response.elapsed:.1f}s, Stand {response.last_modified or '?'}",
+                f"Haus {house_id} ({house_name or '?'}): {len(auctions):>6} Auktionen, "
+                f"{_size(response.size)}, {response.elapsed:.1f}s",
             )
+            _line(INFO, f"     Stand {response.last_modified or '?'}, Mengen {quantities}")
             if isinstance(example, dict):
                 _line(INFO, "     Felder: " + ", ".join(sorted(example)))
                 _line(INFO, "     Beispiel: " + json.dumps(example, ensure_ascii=False)[:160])
-            if commodities:
-                _line(INFO, f"     {len(commodities)} Commodities im selben Dokument")
 
             if not keep_raw:
                 destination.unlink(missing_ok=True)
 
+        # Stapelware liegt nicht im Hausdokument, dort steht nur ein Link darauf.
         if sample_houses:
             house_id = sample_houses[0]
             separate = client.commodities(target, house_id)
             _record(report, f"ruleset/{target}/auctions/{house_id}/commodities", separate)
             if separate.ok:
-                payload = separate.data or {}
-                rows = payload.get("auctions") or payload.get("commodities") or []
-                _line(OK, f"Eigener Commodity-Endpunkt: {len(rows)} Zeilen")
+                rows = (separate.data or {}).get("auctions") or []
+                example = rows[0] if rows else None
+                report["commodities"] = {
+                    "house": house_id,
+                    "rows": len(rows),
+                    "fields": sorted(example) if isinstance(example, dict) else None,
+                    "example": example,
+                }
+                _line(OK, f"Commodity-Endpunkt Haus {house_id}: {len(rows)} Zeilen")
+                if isinstance(example, dict):
+                    _line(INFO, "     Felder: " + ", ".join(sorted(example)))
+                    _line(INFO, "     Beispiel: " + json.dumps(example, ensure_ascii=False)[:160])
             else:
-                _line(INFO, f"Eigener Commodity-Endpunkt -> {separate.status}")
+                _line(INFO, f"Commodity-Endpunkt -> {separate.status}")
 
     report["finished"] = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    report["notes"].append(
-        "Offen bleibt, ob buyout den ganzen Stack oder ein einzelnes Stueck meint - "
-        "das laesst sich nur im Spiel gegenpruefen."
-    )
     return report
 
 

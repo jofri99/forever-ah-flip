@@ -48,9 +48,22 @@ class ApiResponse:
     def ok(self) -> bool:
         return 200 <= self.status < 300
 
+    def header(self, name: str) -> str | None:
+        """HTTP-Header sind ohne Ruecksicht auf Gross- und Kleinschreibung zu lesen.
+
+        Die Battle.net-API schickt sie klein ("last-modified"), requests liefert
+        sie zwar unempfindlich, aber nach dict() ist diese Eigenschaft weg.
+        """
+        wanted = name.lower()
+        for key, value in self.headers.items():
+            if key.lower() == wanted:
+                return value
+        return None
+
     @property
     def last_modified(self) -> str | None:
-        return self.headers.get("Last-Modified")
+        """Wann Blizzard diesen Stand gebaut hat - der Takt der Daten."""
+        return self.header("Last-Modified")
 
 
 class BlizzardClient:
