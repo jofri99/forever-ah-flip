@@ -1,0 +1,60 @@
+name: collect
+
+# Laeuft vorerst nur von Hand. Sobald `verify` in Actions durchlaeuft, den
+# schedule-Block einkommentieren - dann sammelt GitHub stuendlich, ohne dass
+# hier ein Rechner laufen muss.
+on:
+  workflow_dispatch:
+    inputs:
+      ruleset:
+        description: "Ruleset fuer die Stichprobe (leer = erstes mit Auktionshaeusern)"
+        required: false
+        type: string
+  # schedule:
+  #   - cron: "7 * * * *"   # stuendlich zur siebten Minute, UTC
+
+permissions:
+  contents: read
+
+concurrency:
+  group: collect
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Abhaengigkeiten installieren
+        run: pip install -r requirements.txt
+
+      - name: Forever-Endpunkte pruefen
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+          BLIZZARD_REGION: eu
+          BLIZZARD_LOCALE: de_DE
+        run: |
+          if [ -z "$BLIZZARD_CLIENT_ID" ]; then
+            echo "::error::Secrets BLIZZARD_CLIENT_ID und BLIZZARD_CLIENT_SECRET fehlen."
+            echo "Anlegen unter Settings -> Secrets and variables -> Actions."
+            exit 1
+          fi
+          python -m collector verify ${{ inputs.ruleset && format('--ruleset {0}', inputs.ruleset) || '' }}
+
+      - name: Bericht hochladen
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: verify-report
+          path: data/verify/*.json
+          if-no-files-found: ignore
+          retention-days: 30
