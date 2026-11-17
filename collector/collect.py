@@ -230,7 +230,10 @@ def run(
         result.update(snapshot_ts=snapshot_ts, bytes=response.size)
 
         items_path = store.snapshot_path(warehouse, store.ITEMS, house, snapshot_ts)
-        if items_path.exists() and not force:
+        # Nicht die Datei pruefen, sondern den juengsten bekannten Stand: im
+        # Ausschnitt-Checkout liegen die aelteren Dateien gar nicht auf der Platte.
+        already_stored = items_path.exists() or (latest is not None and snapshot_ts <= latest)
+        if already_stored and not force:
             log.info("Stand %s steckt schon im Warehouse", snapshot_ts)
             result.update(skipped=True, reason="schon verarbeitet")
             if not keep_raw:
@@ -295,6 +298,9 @@ def run(
         _log_run(con, warehouse, started, result)
     finally:
         con.close()
+
+    # Zuletzt, wenn alles andere liegt: erst jetzt gilt der Stand als verarbeitet.
+    store.write_pointer(warehouse, house, snapshot_ts)
 
     if not keep_raw:
         shutil.rmtree(raw_dir, ignore_errors=True)

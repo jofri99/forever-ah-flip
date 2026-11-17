@@ -54,6 +54,7 @@ data/warehouse/                                  = Branch `data`
                                                  guenstigster Preis, p25, Median, Gebote
   sales/house=114/dt=2026-11-17/081855.parquet   je Item: verkauft, abgelaufen, unklar, neu
   runs/house=114/dt=2026-11-17/081855.parquet    eine Zeile Protokoll
+  latest/house=114.json                          Zeiger auf den juengsten Stand
 data/state/house114.parquet                      rohe Momentaufnahme, nur bis zum naechsten Lauf
 ```
 
@@ -81,6 +82,24 @@ Neues, schickt der Sammler `If-Modified-Since`, bekommt `304` und schreibt nicht
 
 Geht der Cache verloren, fehlen fuer genau einen Stand die Verkaeufe - Preise und Mengen
 sind davon nicht betroffen.
+
+Der Workflow checkt vom Branch `data` nur `latest/` aus, nicht den Bestand. Sonst wuerde
+jeder Lauf alles herunterladen, was je gesammelt wurde. Der Sammler liest aus
+`latest/house=114.json`, welcher Stand der juengste ist, und `git add --sparse` nimmt die
+neuen Dateien auf, obwohl sie ausserhalb des ausgecheckten Ausschnitts liegen.
+
+Git als Datenspeicher ist eine Uebergangsloesung: der Branch waechst um rund 1,3 GB im
+Jahr, und GitHub raet, unter 1 GB zu bleiben. Weil jede Datei unveraendert bleibt und
+`data` keine gemeinsame Historie mit `main` hat, ist der Ausstieg einfach - Dateien in
+einen Objektspeicher kopieren, Branch loeschen.
+
+Ohne Git lesen geht auch, jede Datei ist direkt abrufbar (Teilabrufe und CORS inklusive,
+bis zu fuenf Minuten zwischengespeichert):
+
+```
+https://raw.githubusercontent.com/jofri99/forever-ah-flip/data/latest/house=114.json
+https://raw.githubusercontent.com/jofri99/forever-ah-flip/data/items/house=114/dt=2026-11-17/091854.parquet
+```
 
 Die Daten lokal haben:
 

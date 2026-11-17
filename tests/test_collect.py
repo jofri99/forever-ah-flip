@@ -288,3 +288,67 @@ def test_run_skips_a_snapshot_that_is_already_stored(settings: Settings) -> None
     )
     repeated = run(settings, client=client)
     assert repeated["skipped"] and repeated["reason"] == "schon verarbeitet"
+
+
+def test_pointer_roundtrip_and_precedence(tmp_path: Path) -> None:
+    assert store.read_pointer(tmp_path, 114) is None
+
+    path = store.write_pointer(tmp_path, 114, T0)
+    assert path.relative_to(tmp_path).as_posix() == "latest/house=114.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    assert payload == {
+        "house": 114,
+        "snapshot_ts": "2026-11-14T10:00:00",
+        "items": "items/house=114/dt=2026-11-14/100000.parquet",
+    }
+    assert store.latest_snapshot(tmp_path, 114) == T0
+
+    # Liegt eine juengere Datei auf der Platte als der Zeiger sagt, gewinnt die Datei.
+    newer = store.snapshot_path(tmp_path, store.ITEMS, 114, T1)
+    newer.parent.mkdir(parents=True, exist_ok=True)
+    newer.write_bytes(b"")
+    assert store.latest_snapshot(tmp_path, 114) == T1
+
+    # Ein kaputter Zeiger ist kein Absturz, sondern einfach kein Zeiger.
+    path.write_text("kein json", encoding="utf-8")
+    assert store.read_pointer(tmp_path, 114) is None
+
+
+def test_run_works_when_only_the_pointer_is_checked_out(settings: Settings) -> None:
+    """Wie in Actions: vom Branch data liegt nur latest/ auf der Platte."""
+    import shutil
+
+    client = FakeClient()
+    warehouse = settings.warehouse_dir
+
+    client.serve(T0, SNAPSHOT_A, COMMODITIES_A)
+    run(settings, client=client)
+    assert store.read_pointer(warehouse, 114) == T0
+
+    # Ausschnitt-Checkout nachstellen: alle Daten weg, nur der Zeiger bleibt.
+    for dataset in (store.ITEMS, store.SALES, store.RUNS):
+        shutil.rmtree(warehouse / dataset, ignore_errors=True)
+
+    # Unveraendert: der Zeiger liefert das Datum fuer If-Modified-Since.
+    again = run(settings, client=client)
+    assert again["skipped"] and again["reason"] == "unveraendert"
+    assert client.seen_if_modified_since[-1] == "Sat, 14 Nov 2026 10:00:00 GMT"
+
+    # Ignoriert der Server den Header, darf derselbe Stand trotzdem nicht doppelt entstehen.
+    honest_auctions = client.auctions
+    client.auctions = lambda ruleset, house, stream_to=None, if_modified_since=None: client._respond(  # type: ignore[method-assign]
+        client.auction_payload, stream_to
+    )
+    repeated = run(settings, client=client)
+    assert repeated["skipped"] and repeated["reason"] == "schon verarbeitet"
+    assert not (warehouse / store.ITEMS).exists()
+    client.auctions = honest_auctions  # type: ignore[method-assign]
+
+    # Ein neuer Stand wird geschrieben, mit Verkaeufen, und der Zeiger rueckt vor.
+    client.serve(T1, SNAPSHOT_B, COMMODITIES_B)
+    second = run(settings, client=client)
+    assert not second["skipped"]
+    assert second["sold"] == 1
+    assert store.snapshot_path(warehouse, store.ITEMS, 114, T1).exists()
+    assert store.snapshot_path(warehouse, store.SALES, 114, T1).exists()
+    assert store.read_pointer(warehouse, 114) == T1

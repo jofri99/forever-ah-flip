@@ -15,6 +15,7 @@ in die Historie - rund 30 MB am Tag fuer 2,4 MB Daten.
 from __future__ import annotations
 
 import datetime as dt
+import json
 import os
 from email.utils import format_datetime
 from pathlib import Path
@@ -24,6 +25,8 @@ import duckdb
 ITEMS = "items"
 SALES = "sales"
 RUNS = "runs"
+LATEST = "latest"
+POINTER_FORMAT = "%Y-%m-%dT%H:%M:%S"
 
 
 def connect() -> duckdb.DuckDBPyConnection:
@@ -40,19 +43,54 @@ def snapshot_path(root: Path, dataset: str, house: int, ts: dt.datetime) -> Path
     return root / dataset / f"house={house}" / f"dt={ts:%Y-%m-%d}" / f"{ts:%H%M%S}.parquet"
 
 
-def latest_snapshot(root: Path, house: int, dataset: str = ITEMS) -> dt.datetime | None:
-    """Der juengste Stand, der schon im Warehouse liegt - abgelesen am Dateinamen."""
-    base = root / dataset / f"house={house}"
-    if not base.is_dir():
+def pointer_path(root: Path, house: int) -> Path:
+    return root / LATEST / f"house={house}.json"
+
+
+def read_pointer(root: Path, house: int) -> dt.datetime | None:
+    path = pointer_path(root, house)
+    if not path.is_file():
         return None
-    newest: dt.datetime | None = None
-    for file in base.glob("dt=*/*.parquet"):
-        try:
-            stamp = dt.datetime.strptime(file.parent.name[3:] + file.stem, "%Y-%m-%d%H%M%S")
-        except ValueError:
-            continue
-        if newest is None or stamp > newest:
-            newest = stamp
+    try:
+        stamp = json.loads(path.read_text(encoding="utf-8"))["snapshot_ts"]
+        return dt.datetime.strptime(stamp, POINTER_FORMAT)
+    except (ValueError, KeyError, TypeError):
+        return None
+
+
+def write_pointer(root: Path, house: int, ts: dt.datetime) -> Path:
+    """Haelt fest, welcher Stand der juengste ist.
+
+    In Actions wird der Branch `data` nur ausschnittsweise ausgecheckt, damit nicht
+    bei jedem Lauf der gesamte Bestand heruntergeladen wird. Die Parquet-Dateien
+    liegen dann nicht auf der Platte - diese eine kleine Datei schon.
+    """
+    path = pointer_path(root, house)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {
+        "house": house,
+        "snapshot_ts": ts.strftime(POINTER_FORMAT),
+        "items": snapshot_path(root, ITEMS, house, ts).relative_to(root).as_posix(),
+    }
+    temporary = path.with_name(path.name + ".tmp")
+    temporary.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    os.replace(temporary, path)
+    return path
+
+
+def latest_snapshot(root: Path, house: int, dataset: str = ITEMS) -> dt.datetime | None:
+    """Der juengste Stand im Warehouse: laut Zeigerdatei und laut Dateinamen,
+    je nachdem, was weiter reicht. Im Ausschnitt-Checkout gibt es nur den Zeiger."""
+    newest = read_pointer(root, house)
+    base = root / dataset / f"house={house}"
+    if base.is_dir():
+        for file in base.glob("dt=*/*.parquet"):
+            try:
+                stamp = dt.datetime.strptime(file.parent.name[3:] + file.stem, "%Y-%m-%d%H%M%S")
+            except ValueError:
+                continue
+            if newest is None or stamp > newest:
+                newest = stamp
     return newest
 
 

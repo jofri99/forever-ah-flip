@@ -26,11 +26,16 @@ jobs:
       - name: Code auschecken
         uses: actions/checkout@v4
 
-      - name: Warehouse auschecken (Branch data)
+      # Vom Branch data nur den Zeiger auf den juengsten Stand, nicht den Bestand.
+      # Ein volles Checkout wuerde bei jedem Lauf alles herunterladen, was je
+      # gesammelt wurde - nach einem Jahr ueber 1 GB, 72-mal am Tag. So bleiben
+      # die Parquet-Dateien auf dem Server, und der Lauf kennt nur ihre Namen.
+      - name: Warehouse auschecken (Branch data, nur latest/)
         uses: actions/checkout@v4
         with:
           ref: data
           path: data/warehouse
+          sparse-checkout: latest
 
       - uses: actions/setup-python@v5
         with:
@@ -72,7 +77,14 @@ jobs:
         run: |
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add -A
+          # --sparse ist noetig: die neuen Dateien liegen ausserhalb des ausgecheckten
+          # Ausschnitts, und ohne den Schalter laesst git add sie stillschweigend aus.
+          git add --sparse -A
+          # Ein Commit ohne Datendatei waere ein Zeichen, dass genau das passiert ist.
+          if ! git diff --cached --name-only | grep -q '^items/'; then
+            echo "::error::Im Commit fehlt die items-Datei des neuen Standes."
+            exit 1
+          fi
           git commit -q -m "$SUMMARY"
           git push -q
 
