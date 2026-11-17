@@ -23,6 +23,8 @@ function row(partial: Partial<MarketRow> & Pick<MarketRow, "item_id">): MarketRo
     high_24h: null,
     open_24h: null,
     change_24h_pct: null,
+    vendor_sell: null,
+    vendor_buy: null,
     ...partial,
   }
 }

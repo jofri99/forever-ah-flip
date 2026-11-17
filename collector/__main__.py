@@ -29,6 +29,10 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--force", action="store_true", help="auch einen schon bekannten Stand verarbeiten")
     collect.add_argument("--keep-raw", action="store_true", help="heruntergeladene JSONs behalten")
 
+    names = sub.add_parser("names", help="traegt Namen und Stammdaten neuer Items nach")
+    names.add_argument("--limit", type=int, default=None, help="hoechstens so viele Items pruefen")
+    names.add_argument("--house", type=int, default=None, help="Auktionshaus (Vorgabe 114)")
+
     publish = sub.add_parser("publish", help="baut aus dem Warehouse die Dateien fuer die Anzeige")
     publish.add_argument("--days", type=int, default=14, help="Zeitfenster in Tagen (Vorgabe 14)")
     publish.add_argument("--out", type=Path, default=None, help="Zielordner (Vorgabe web/public/data)")
@@ -73,6 +77,11 @@ def main(argv: list[str] | None = None) -> int:
         from . import verify as verify_module
 
         return verify_module.main(config, ruleset=args.ruleset, keep_raw=args.keep_raw)
+
+    if args.command == "names":
+        from . import names as names_module
+
+        return names_module.main(config, house=args.house, limit=args.limit)
 
     if args.command == "collect":
         from . import collect as collect_module

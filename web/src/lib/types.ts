@@ -21,6 +21,10 @@ export interface MarketRow {
   high_24h: number | null
   open_24h: number | null
   change_24h_pct: number | null
+  /** Was ein Haendler fuer das Item zahlt, in Kupfer. Fehlt, wenn die API das Item nicht kennt. */
+  vendor_sell: number | null
+  /** Listenpreis beim Haendler je Stueck. Steht bei jedem Item, auch wenn es kein Haendler fuehrt. */
+  vendor_buy: number | null
 }
 
 /** Eine Zeile aus hourly.parquet, auf die Spalten des Diagramms beschraenkt. */

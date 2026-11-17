@@ -26,16 +26,19 @@ jobs:
       - name: Code auschecken
         uses: actions/checkout@v4
 
-      # Vom Branch data nur den Zeiger auf den juengsten Stand, nicht den Bestand.
-      # Ein volles Checkout wuerde bei jedem Lauf alles herunterladen, was je
-      # gesammelt wurde - nach einem Jahr ueber 1 GB, 72-mal am Tag. So bleiben
-      # die Parquet-Dateien auf dem Server, und der Lauf kennt nur ihre Namen.
-      - name: Warehouse auschecken (Branch data, nur latest/)
+      # Vom Branch data nur den Zeiger auf den juengsten Stand und die Stammdaten,
+      # nicht den Bestand. Ein volles Checkout wuerde bei jedem Lauf alles
+      # herunterladen, was je gesammelt wurde - nach einem Jahr ueber 1 GB, 72-mal
+      # am Tag. So bleiben die Staende auf dem Server, und der Lauf kennt nur ihre
+      # Namen. ref/ ist klein: je Tag eine Datei mit den neu geprueften Items.
+      - name: Warehouse auschecken (Branch data, nur latest/ und ref/)
         uses: actions/checkout@v4
         with:
           ref: data
           path: data/warehouse
-          sparse-checkout: latest
+          sparse-checkout: |
+            latest
+            ref
 
       - uses: actions/setup-python@v5
         with:
@@ -68,6 +71,16 @@ jobs:
             exit 1
           fi
           python -m collector collect
+
+      # Taucht ein Item zum ersten Mal auf, fehlt sein Name. Ein Fehler hier darf
+      # den gerade gesammelten Stand nicht kosten, darum continue-on-error.
+      - name: Namen neuer Items nachtragen
+        if: steps.collect.outputs.new == 'true'
+        continue-on-error: true
+        env:
+          BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
+          BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
+        run: python -m collector names --limit 1500
 
       - name: Stand in den Branch data schreiben
         if: steps.collect.outputs.new == 'true'

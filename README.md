@@ -113,6 +113,55 @@ git -C data/warehouse pull                # danach zum Aktualisieren
 Lokal sammelt man dann besser nicht in dasselbe Verzeichnis, sonst kollidieren die Dateien
 beim naechsten `pull`. Fuer Experimente: `$env:AH_DATA_DIR = "data/dev"`.
 
+### Stammdaten der Items
+
+Die Auktionsdaten kennen nur Item-IDs. `names` holt dazu alles, was Blizzards statische API
+(`static-forever-eu`, deutsch) hergibt:
+
+```powershell
+python -m collector names              # alle noch ungeprueften Items
+python -m collector names --limit 500
+```
+
+| Spalte | Inhalt |
+|---|---|
+| `name`, `quality` | deutscher Name, Qualitaet (`COMMON`, `RARE`, ...) |
+| `sell_price` | was ein Haendler zahlt, in Kupfer |
+| `purchase_price`, `purchase_quantity` | Listenpreis beim Haendler und fuer wie viele Stueck |
+| `item_class`, `item_subclass`, `inventory_type` | Einordnung und Ausruestungsplatz |
+| `level`, `required_level`, `is_stackable`, `is_equippable`, `max_count` | weitere Eckdaten |
+| `icon` | Adresse des Icons |
+| `raw` | die vollstaendige Antwort als JSON: Ruestung, Schaden, Attribute, Haltbarkeit, Anforderungen |
+
+Abgelegt wird je Tag eine Datei, `ref/items/dt=2026-11-17.parquet`, mit den an dem Tag
+geprueften IDs. Was keine eigene Spalte hat, laesst sich aus `raw` ziehen:
+
+```sql
+SELECT name, raw->>'$.preview_item.armor.value' AS ruestung
+FROM read_parquet('data/warehouse/ref/items/*.parquet')
+WHERE status = 200 AND inventory_type = 'WRIST';
+```
+
+Zwei Dinge sollte man wissen:
+
+- **Die API kennt nur gut die Haelfte.** Von 6.572 Items im Markt fand sie 3.773: bei den
+  alten IDs 52 %, bei den neuen Forever-Items 83 %. Auch Fehlanzeigen (`status = 404`) werden
+  abgelegt, damit sie nicht stuendlich neu abgefragt werden; nach einer Woche gibt es einen
+  neuen Versuch.
+- **`purchase_price` ist ein Listenpreis.** Er steht bei jedem Item, auch wenn es kein
+  Haendler fuehrt. Ob und wo es etwas zu kaufen gibt, weiss diese API nicht.
+
+In Actions traegt der Workflow nach jedem neuen Stand die Stammdaten neu aufgetauchter Items
+nach. `publish` schreibt daraus `names.json` und haengt `vendor_sell` und `vendor_buy` (je
+Stueck) an `market.parquet`.
+
+Fuer die Luecken und fuer Fundorte, Haendler, Entzauberung und Rezepte gibt es
+[ForeverDB](https://foreverdb.net/developers). Dessen Schluessel sind an einen Zweck gebunden:
+ein persoenlicher oder Plugin-Schluessel darf nicht auf einer Website eingesetzt werden, fuer
+eine oeffentliche Seite braucht es einen Website-Schluessel und den sichtbaren Hinweis auf
+foreverdb.net. Angebunden ist das noch nicht; vorgesehen ist `FOREVERDB_API_KEY` in der
+`.env`, und Daten von dort bleiben lokal statt im oeffentlichen Branch `data`.
+
 ### Dateien fuer die Anzeige
 
 Eine Datei je Stand ist gut zum Sammeln und schlecht zum Anzeigen: der Verlauf eines Items
@@ -182,8 +231,9 @@ der Fusszeile steht.
 Der Entwicklungsserver von Vite beantwortet Teilabrufe - ohne die muesste die Seite fuer
 jedes Diagramm die ganze `hourly.parquet` laden. `python -m http.server` kann das nicht.
 
-Item-Namen fehlen noch: die API liefert nur IDs. Liegt eine `web/public/data/names.json`
-der Form `{"2589": "Leinenstoff"}` vor, zeigt die Seite Namen statt `Item 2589`.
+Namen kommen aus `names.json`. Fuer Items, die Blizzards API nicht kennt, steht weiter
+`Item 2589` da. Die Detailansicht zeigt ausserdem, was ein Haendler zahlt, und weist darauf
+hin, wenn das guenstigste Angebot darunter liegt.
 
 ### Wie Verkaeufe entstehen
 
@@ -386,6 +436,8 @@ collector/
   blizzard.py   OAuth-Token, Wiederholungen bei 429 und 5xx, Download in Dateien
   verify.py     prueft die Endpunkte und schreibt den Bericht
   collect.py    ein Durchlauf: holen, verdichten, Verkaeufe ableiten
+  names.py      Stammdaten der Items: Namen, Haendlerpreise, volle Antwort
+  publish.py    baut die Dateien fuer die Oberflaeche
   store.py      Pfade und Parquet-Dateien des Warehouse
   __main__.py   py -m collector <kommando>
 tests/          gefaelschte Session und gefaelschter Client, echtes DuckDB, kein Netz

@@ -23,7 +23,7 @@ from typing import Any
 
 import duckdb
 
-from . import store
+from . import names, store
 from .config import ROOT, Settings
 
 HOURLY = "hourly.parquet"
@@ -131,8 +131,15 @@ def _build_market(con: duckdb.DuckDBPyConnection) -> int:
                day.low_24h, day.high_24h, day.open_24h,
                CASE WHEN day.open_24h > 0
                     THEN round((cur.min_price - day.open_24h) * 100.0 / day.open_24h, 1)
-               END AS change_24h_pct
-        FROM cur LEFT JOIN day ON day.item_id = cur.item_id AND day.kind = cur.kind
+               END AS change_24h_pct,
+               -- Was ein Haendler zahlt, und sein Listenpreis je Stueck. Der Listenpreis
+               -- steht bei jedem Item, auch wenn es kein Haendler fuehrt.
+               k.sell_price::DOUBLE AS vendor_sell,
+               (k.purchase_price::DOUBLE / greatest(coalesce(k.purchase_quantity, 1), 1))
+                   AS vendor_buy
+        FROM cur
+        LEFT JOIN day ON day.item_id = cur.item_id AND day.kind = cur.kind
+        LEFT JOIN known k ON k.item_id = cur.item_id AND k.status = 200
         """
     )
     return con.execute("SELECT count(*) FROM market").fetchone()[0]
@@ -160,6 +167,8 @@ def build(
         since = last - dt.timedelta(days=days)
 
         hourly_rows = _build_hourly(con, since)
+        # Stammdaten (Namen, Haendlerpreise) stehen im Warehouse unter ref/items.
+        names.load_known(con, settings.warehouse_dir)
         market_rows = _build_market(con)
 
         store.write_parquet(
@@ -171,6 +180,18 @@ def build(
             con, "market", out_dir / MARKET,
             order_by="item_id, kind", compression=COMPRESSION,
         )
+
+        # Ohne Namen zeigt die Seite "Item 2589".
+        item_names = names.names_from_known(con)
+        names_file = out_dir / NAMES
+        if item_names:
+            names_file.write_text(
+                json.dumps(item_names, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
+            )
+        named_in_market = con.execute(
+            "SELECT count(DISTINCT item_id) FROM market WHERE item_id IN "
+            "(SELECT item_id FROM known WHERE status = 200 AND name IS NOT NULL)"
+        ).fetchone()[0] if item_names else 0
 
         first_ts, last_ts, snapshots, with_sales = con.execute(
             "SELECT min(ts), max(ts), count(DISTINCT ts), "
@@ -193,6 +214,7 @@ def build(
         "items": market_rows,
         # Die Seite fragt names.json nur ab, wenn hier true steht.
         "names": (out_dir / NAMES).is_file(),
+        "items_with_name": named_in_market,
         "files": {
             HOURLY: {
                 "rows": hourly_rows,
@@ -224,5 +246,6 @@ def main(settings: Settings, out_dir: Path | None = None, house: int | None = No
         f"{hourly['row_groups']} Zeilengruppen"
     )
     print(f"  {MARKET:<15} {market['rows']:>9,} Zeilen, {market['bytes'] / 1024:>8,.0f} KB")
+    print(f"  Namen fuer {meta['items_with_name']:,} von {meta['items']:,} Items")
     print(f"  nach {target}")
     return 0

@@ -80,6 +80,11 @@ export function ItemDetail({ meta, row, names, onClose }: ItemDetailProps) {
         ? `aus ${Math.round(hours)} von 24 h`
         : undefined
 
+  // Liegt das guenstigste Angebot unter dem, was ein Haendler zahlt, ist der
+  // Weiterverkauf an den Haendler ein sicherer Gewinn.
+  const belowVendor =
+    row.vendor_sell != null && row.min_price != null && row.vendor_sell > 0 && row.min_price < row.vendor_sell
+
   return (
     <Card>
       <CardHeader>
@@ -120,6 +125,12 @@ export function ItemDetail({ meta, row, names, onClose }: ItemDetailProps) {
           </Tile>
           <Tile label="Verkauft 24 h" note={coverage}>
             <Count value={row.qty_sold_24h} />
+          </Tile>
+          <Tile label="Händler zahlt" note={belowVendor ? "Angebot liegt darunter" : undefined}>
+            <Money value={row.vendor_sell} />
+          </Tile>
+          <Tile label="Händler-Listenpreis" note="nicht jedes Item führt ein Händler">
+            <Money value={row.vendor_buy} />
           </Tile>
         </div>
 
