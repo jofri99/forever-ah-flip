@@ -73,6 +73,22 @@ def _load(con: duckdb.DuckDBPyConnection, warehouse: Path, house: int) -> None:
         )
 
 
+def _load_local_details(con: duckdb.DuckDBPyConnection, settings: Settings) -> None:
+    """Haendlerpreise aus dem lokalen Abzug von ForeverDB, wo Blizzard keinen nennt.
+
+    Den Abzug gibt es nur auf diesem Rechner. In Actions bleibt die Tabelle leer.
+    """
+    con.execute("CREATE OR REPLACE TEMP TABLE fdb_details (item_id INTEGER, sell_price BIGINT)")
+    target = foreverdb_dump.dump_dir(settings) / foreverdb_dump.DETAILS_FILE
+    if not target.is_file() or target.stat().st_size == 0:
+        return
+    con.execute(
+        f"INSERT INTO fdb_details SELECT id, max(sellPrice) FROM read_json('{store.sql_path(target)}', "
+        "format = 'newline_delimited', columns = {'id': 'INTEGER', 'sellPrice': 'BIGINT'}, "
+        "ignore_errors = true) WHERE id IS NOT NULL GROUP BY id"
+    )
+
+
 def _build_hourly(con: duckdb.DuckDBPyConnection, since: dt.datetime) -> int:
     """Eine Zeile je Item und Stand. Zeit als Unix-Sekunden, Preise als DOUBLE:
     beides kommt im Browser als gewoehnliche Zahl an, ohne BigInt und ohne Datumsobjekte."""
@@ -134,12 +150,13 @@ def _build_market(con: duckdb.DuckDBPyConnection) -> int:
                END AS change_24h_pct,
                -- Was ein Haendler zahlt, und sein Listenpreis je Stueck. Der Listenpreis
                -- steht bei jedem Item, auch wenn es kein Haendler fuehrt.
-               k.sell_price::DOUBLE AS vendor_sell,
+               coalesce(k.sell_price, fd.sell_price)::DOUBLE AS vendor_sell,
                (k.purchase_price::DOUBLE / greatest(coalesce(k.purchase_quantity, 1), 1))
                    AS vendor_buy
         FROM cur
         LEFT JOIN day ON day.item_id = cur.item_id AND day.kind = cur.kind
         LEFT JOIN known k ON k.item_id = cur.item_id AND k.status = 200
+        LEFT JOIN fdb_details fd ON fd.item_id = cur.item_id
         """
     )
     return con.execute("SELECT count(*) FROM market").fetchone()[0]
@@ -169,6 +186,7 @@ def build(
         hourly_rows = _build_hourly(con, since)
         # Stammdaten (Namen, Haendlerpreise) stehen im Warehouse unter ref/items.
         names.load_known(con, settings.warehouse_dir, settings.locale)
+        _load_local_details(con, settings)
         market_rows = _build_market(con)
 
         store.write_parquet(

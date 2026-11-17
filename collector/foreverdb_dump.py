@@ -132,6 +132,160 @@ def dump_list(
     }
 
 
+DETAILS_FILE = "item_details.jsonl"
+DETAILS_MISSING = "item_details_missing"      # Schluessel in state.json
+
+
+def details_done(directory: Path) -> set[int]:
+    """Welche Items schon abgezogen sind oder die es bei ForeverDB nicht gibt."""
+    done: set[int] = set(_load_state(directory).get(DETAILS_MISSING) or [])
+    target = directory / DETAILS_FILE
+    if target.is_file():
+        with open(target, encoding="utf-8") as handle:
+            for line in handle:
+                try:
+                    done.add(int(json.loads(line)["id"]))
+                except (ValueError, KeyError, TypeError):
+                    continue        # eine abgerissene letzte Zeile nach einem Abbruch
+    return done
+
+
+def dump_item_details(
+    client: ForeverDBClient,
+    item_ids: list[int],
+    directory: Path,
+    max_requests: int | None = None,
+) -> dict[str, Any]:
+    """Holt die Details einzeln - die API gibt sie nicht im Stapel her.
+
+    Jedes Item wird sofort als Zeile angehaengt. Ein Abbruch kostet hoechstens
+    das eine, das gerade unterwegs war; der naechste Lauf ueberspringt alles,
+    was schon da ist.
+    """
+    directory.mkdir(parents=True, exist_ok=True)
+    target = directory / DETAILS_FILE
+    done = details_done(directory)
+    todo = [item_id for item_id in item_ids if item_id not in done]
+
+    state = _load_state(directory)
+    missing: list[int] = list(state.get(DETAILS_MISSING) or [])
+    fetched = not_found = requests_made = 0
+    stopped: str | None = None
+
+    with open(target, "a", encoding="utf-8") as handle:
+        for item_id in todo:
+            if max_requests is not None and requests_made >= max_requests:
+                stopped = "Grenze fuer diesen Lauf erreicht"
+                break
+            try:
+                response = client.get(f"/items/{item_id}")
+            except ForeverDBQuotaError as exc:
+                stopped = str(exc)
+                break
+            requests_made += 1
+
+            if response.status == 404:
+                # Festhalten, sonst fragt jeder Lauf erneut nach demselben Item.
+                missing.append(item_id)
+                state[DETAILS_MISSING] = missing
+                _save_state(directory, state)
+                not_found += 1
+                continue
+            if not response.ok:
+                stopped = f"HTTP {response.status} bei Item {item_id}"
+                break
+
+            item = (response.data or {}).get("data")
+            if not isinstance(item, dict):
+                stopped = f"unerwartete Antwort bei Item {item_id}"
+                break
+            handle.write(json.dumps(item, ensure_ascii=False, separators=(",", ":")) + "\n")
+            handle.flush()
+            fetched += 1
+
+    return {
+        "wanted": len(item_ids),
+        "already": len(item_ids) - len(todo),
+        "fetched": fetched,
+        "not_found": not_found,
+        "left": len(todo) - fetched - not_found,
+        "requests": requests_made,
+        "stopped": stopped,
+        "file": target,
+    }
+
+
+def detail_candidates(settings: Settings, scope: str, house: int | None = None) -> list[int]:
+    """Welche Items abgezogen werden sollen, die meistgehandelten zuerst.
+
+    gaps    Items im Markt, die Blizzards API nicht kennt
+    market  alle Items im Markt
+    all     alles, was die Item-Liste von ForeverDB nennt
+    """
+    from . import names        # hier, um einen Importkreis zu vermeiden
+
+    house = house or settings.house
+    listed = dump_dir(settings) / "items.jsonl"
+    con = store.connect()
+    try:
+        if scope == "all":
+            if not listed.is_file():
+                raise RuntimeError("Erst die Item-Liste abziehen: python -m collector foreverdb items")
+            rows = con.execute(
+                f"SELECT id FROM read_json('{store.sql_path(listed)}', format = 'newline_delimited', "
+                "columns = {'id': 'INTEGER'}) ORDER BY id"
+            ).fetchall()
+            return [row[0] for row in rows]
+
+        items = store.dataset_glob(settings.warehouse_dir, store.ITEMS, house)
+        if items is None:
+            raise RuntimeError("Im Warehouse liegt noch kein Stand - erst `git -C data/warehouse pull`.")
+        names.load_known(con, settings.warehouse_dir, settings.locale)
+        # Reihenfolge nach Angeboten: bricht der Lauf ab, sind die wichtigen Items schon da.
+        con.execute(
+            f"CREATE TEMP TABLE traded AS SELECT item_id, sum(n_listings) AS listings "
+            f"FROM read_parquet('{items}', hive_partitioning = false) GROUP BY item_id"
+        )
+        where = (
+            "WHERE t.item_id NOT IN (SELECT item_id FROM known WHERE status = 200)"
+            if scope == "gaps"
+            else ""
+        )
+        rows = con.execute(
+            f"SELECT t.item_id FROM traded t {where} ORDER BY t.listings DESC, t.item_id"
+        ).fetchall()
+        ids = [row[0] for row in rows]
+
+        # Was ForeverDB gar nicht fuehrt, kostet nur Anfragen.
+        if listed.is_file():
+            known_there = {
+                row[0]
+                for row in con.execute(
+                    f"SELECT id FROM read_json('{store.sql_path(listed)}', format = 'newline_delimited', "
+                    "columns = {'id': 'INTEGER'})"
+                ).fetchall()
+            }
+            ids = [item_id for item_id in ids if item_id in known_there]
+        return ids
+    finally:
+        con.close()
+
+
+def details_main(settings: Settings, scope: str = "gaps", max_requests: int | None = None) -> int:
+    ids = detail_candidates(settings, scope)
+    directory = dump_dir(settings)
+    with ForeverDBClient(settings.foreverdb_key) as client:
+        result = dump_item_details(client, ids, directory, max_requests=max_requests)
+    print(
+        f"{result['wanted']} Items gewuenscht, {result['already']} schon da, "
+        f"{result['fetched']} geholt, {result['not_found']} kennt ForeverDB nicht, {result['left']} offen"
+    )
+    if result["stopped"]:
+        print(f"  unterbrochen: {result['stopped']} - der naechste Lauf macht dort weiter")
+    print(f"  {result['requests']} Anfragen, nach {result['file']}")
+    return 0
+
+
 def english_names(con: duckdb.DuckDBPyConnection, settings: Settings) -> dict[str, str]:
     """ID als Text -> englischer Name aus dem lokalen Abzug. Leer, wenn es keinen gibt."""
     target = dump_dir(settings) / "items.jsonl"

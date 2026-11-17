@@ -88,6 +88,7 @@ def test_build_creates_views_over_every_dataset(filled: Settings) -> None:
     assert result["path"] == filled.local_dir / "forever.duckdb"
     assert result["counts"] == {
         "blizzard_items": 1,
+        "foreverdb_item_details": 0,
         "foreverdb_items": 2,
         "history": 4,
         "items": 2,
@@ -177,3 +178,30 @@ def test_query_prints_a_table_and_missing_db_is_a_clear_error(
     db.db_path(filled).unlink()
     with pytest.raises(RuntimeError, match="collector db"):
         db.query(filled, "SELECT 1")
+
+
+def test_details_from_foreverdb_fill_the_vendor_price(filled: Settings) -> None:
+    directory = foreverdb_dump.dump_dir(filled)
+    # Die Details des Schwerts, wie sie /items/647 liefert - und eine abgerissene Zeile,
+    # wie sie nach einem Abbruch am Dateiende stehen kann.
+    (directory / foreverdb_dump.DETAILS_FILE).write_text(
+        '{"id":647,"name":"Destiny","sellPrice":51234,"bonding":"Binds when equipped",'
+        '"disenchantable":true,"unique":false,"stats":[{"name":"Strength","value":9}]}\n'
+        '{"id":999,"name":"abger',
+        encoding="utf-8",
+    )
+    result = db.build(filled)
+    assert result["counts"]["foreverdb_item_details"] == 1
+
+    got = {
+        r[0]: r[1:]
+        for r in rows(filled, "SELECT item_id, vendor_sell, bonding, disenchantable, has_details FROM items")
+    }
+    # Das Schwert kennt Blizzard nicht: der Haendlerpreis kommt aus den Details.
+    assert got[647] == (51234, "Binds when equipped", True, True)
+    # Beim Stoff gilt weiter Blizzards Angabe.
+    assert got[2589] == (13, None, None, False)
+
+    assert rows(filled, "SELECT vendor_sell FROM latest WHERE item_id = 647") == [(51234,)]
+    # Auch die verschachtelten Felder sind da.
+    assert rows(filled, "SELECT stats[1].name FROM foreverdb_item_details") == [("Strength",)]

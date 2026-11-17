@@ -61,6 +61,18 @@ FOREVERDB_ITEM_FIELDS: dict[str, str] = {
 }
 EMPTY["foreverdb_items"] = ", ".join(f'"{name}" {kind}' for name, kind in FOREVERDB_ITEM_FIELDS.items())
 
+# Aus den einzeln abgezogenen Details braucht `items` diese Felder.
+FOREVERDB_DETAIL_FIELDS: dict[str, str] = {
+    "id": "INTEGER",
+    "sellPrice": "BIGINT",
+    "bonding": "VARCHAR",
+    "disenchantable": "BOOLEAN",
+    "unique": "BOOLEAN",
+}
+EMPTY["foreverdb_item_details"] = ", ".join(
+    f'"{name}" {kind}' for name, kind in FOREVERDB_DETAIL_FIELDS.items()
+)
+
 
 def _padded(con: duckdb.DuckDBPyConnection, source: str, required: dict[str, str]) -> str:
     """Ergaenzt fehlende Spalten als NULL.
@@ -137,6 +149,23 @@ def _foreverdb_views(con: duckdb.DuckDBPyConnection, settings: Settings) -> list
             created.append(view)
         elif name == "items":
             _empty_view(con, view, EMPTY[view])
+
+    # Die Details kommen einzeln und liegen in einer eigenen Datei.
+    details = directory / foreverdb_dump.DETAILS_FILE
+    if details.is_file() and details.stat().st_size > 0:
+        source = _padded(
+            con,
+            f"SELECT * FROM read_json('{store.sql_path(details)}', format = 'newline_delimited', "
+            "union_by_name = true, sample_size = -1, ignore_errors = true)",
+            FOREVERDB_DETAIL_FIELDS,
+        )
+        # Eine nach einem Abbruch abgerissene letzte Zeile ergibt eine Zeile ohne id.
+        con.execute(
+            f"CREATE OR REPLACE VIEW foreverdb_item_details AS SELECT * FROM ({source}) WHERE id IS NOT NULL"
+        )
+        created.append("foreverdb_item_details")
+    else:
+        _empty_view(con, "foreverdb_item_details", EMPTY["foreverdb_item_details"])
     return created
 
 
@@ -164,16 +193,21 @@ SELECT coalesce(b.item_id, f.id)                       AS item_id,
        coalesce(b.level, f.itemLevel)                  AS item_level,
        coalesce(b.required_level, f.requiredLevel)     AS required_level,
        b.is_stackable,
-       b.sell_price                                    AS vendor_sell,
+       -- Was ein Haendler zahlt: von Blizzard, sonst aus den Details von ForeverDB.
+       coalesce(b.sell_price, d.sellPrice)             AS vendor_sell,
        CASE WHEN b.purchase_price IS NOT NULL
             THEN b.purchase_price / greatest(coalesce(b.purchase_quantity, 1), 1)
        END                                             AS vendor_buy,
        coalesce(b.icon, f.icon)                        AS icon,
        f.url                                           AS foreverdb_url,
+       d.bonding,
+       d.disenchantable,
        b.item_id IS NOT NULL                           AS in_blizzard,
-       f.id IS NOT NULL                                AS in_foreverdb
+       f.id IS NOT NULL                                AS in_foreverdb,
+       d.id IS NOT NULL                                AS has_details
 FROM blizzard_items b
-FULL OUTER JOIN foreverdb_items f ON f.id = b.item_id;
+FULL OUTER JOIN foreverdb_items f ON f.id = b.item_id
+LEFT JOIN foreverdb_item_details d ON d.id = coalesce(b.item_id, f.id);
 
 -- Der juengste Stand, mit Namen und Haendlerpreisen.
 CREATE OR REPLACE VIEW latest AS
@@ -228,6 +262,7 @@ def build(settings: Settings) -> dict[str, Any]:
         for view in _foreverdb_views(con, settings):
             present[view] = True
         present.setdefault("foreverdb_items", False)
+        present.setdefault("foreverdb_item_details", False)
         con.execute(DERIVED)
 
         views = [

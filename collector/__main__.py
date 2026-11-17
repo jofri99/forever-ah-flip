@@ -38,6 +38,15 @@ def build_parser() -> argparse.ArgumentParser:
     foreverdb.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
     foreverdb.add_argument("--restart", action="store_true", help="von vorn beginnen statt fortsetzen")
 
+    details = sub.add_parser(
+        "foreverdb-details", help="zieht die Details einzelner Items von ForeverDB ab (fortsetzbar)"
+    )
+    details.add_argument(
+        "--scope", choices=["gaps", "market", "all"], default="gaps",
+        help="gaps: Items im Markt, die Blizzard nicht kennt (Vorgabe); market: alle im Markt; all: alle",
+    )
+    details.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
+
     sub.add_parser("db", help="baut die lokale DuckDB-Datei mit Sichten auf alle Daten")
 
     sql = sub.add_parser("sql", help="fuehrt eine Abfrage gegen die lokale Datenbank aus")
@@ -87,6 +96,16 @@ def main(argv: list[str] | None = None) -> int:
                 config, args.lists, max_requests=args.max_requests, restart=args.restart
             )
         except ForeverDBError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+
+    if args.command == "foreverdb-details":
+        from . import foreverdb_dump
+        from .foreverdb import ForeverDBError
+
+        try:
+            return foreverdb_dump.details_main(config, scope=args.scope, max_requests=args.max_requests)
+        except (ForeverDBError, RuntimeError) as exc:
             print(exc, file=sys.stderr)
             return 2
 

@@ -197,3 +197,75 @@ def test_english_names_fill_only_the_gaps(tmp_path: Path) -> None:
     assert {**english, **{"2589": "Leinenstoff"}} == {"2589": "Leinenstoff", "7": "Bent Staff"}
     # Der Abzug liegt ausserhalb des Warehouse, also ausserhalb des oeffentlichen Branches.
     assert settings.warehouse_dir not in directory.parents
+
+
+class FakeDetails(FakeCatalog):
+    """Kennt die Items 1 bis 5, ausser der 3."""
+
+    def get(self, url, params=None, timeout=None):
+        if "/items/" not in url:
+            return super().get(url, params, timeout)
+        self.calls.append({"url": url, "params": {}})
+        if self.queued:
+            return self.queued.pop(0)
+        item_id = int(url.rsplit("/", 1)[1])
+        if item_id == 3 or item_id > 5:
+            return FakeResponse(404, {"error": "not found"})
+        return FakeResponse(200, {"data": {"id": item_id, "name": f"Item {item_id}", "sellPrice": item_id * 10}, "meta": {"client": "dev-0000"}})
+
+
+def asked(session: FakeCatalog) -> list[int]:
+    return [int(c["url"].rsplit("/", 1)[1]) for c in session.calls]
+
+
+def test_details_are_fetched_one_by_one_and_written_at_once(tmp_path: Path) -> None:
+    session = FakeDetails()
+    result = foreverdb_dump.dump_item_details(make_client(session), [5, 1, 3], tmp_path)
+
+    # In der gewuenschten Reihenfolge - die meistgehandelten zuerst.
+    assert asked(session) == [5, 1, 3]
+    assert (result["fetched"], result["not_found"], result["left"], result["stopped"]) == (2, 1, 0, None)
+
+    lines = (tmp_path / foreverdb_dump.DETAILS_FILE).read_text(encoding="utf-8").splitlines()
+    assert [json.loads(line)["id"] for line in lines] == [5, 1]
+    # Nur das Item selbst wird abgelegt, nicht der Umschlag mit der Entwickler-ID.
+    assert "meta" not in json.loads(lines[0]) and "dev-0000" not in lines[0]
+
+
+def test_details_resume_skips_what_is_there_and_what_does_not_exist(tmp_path: Path) -> None:
+    session = FakeDetails()
+    client = make_client(session)
+
+    first = foreverdb_dump.dump_item_details(client, [1, 2, 3, 4, 5], tmp_path, max_requests=3)
+    assert asked(session) == [1, 2, 3]
+    assert (first["fetched"], first["not_found"], first["left"]) == (2, 1, 2)
+    assert "Grenze" in first["stopped"]
+
+    # Der zweite Lauf fragt weder die vorhandenen noch die Fehlanzeige erneut.
+    session.calls.clear()
+    second = foreverdb_dump.dump_item_details(client, [1, 2, 3, 4, 5], tmp_path)
+    assert asked(session) == [4, 5]
+    assert (second["already"], second["fetched"], second["left"], second["stopped"]) == (3, 2, 0, None)
+
+    session.calls.clear()
+    third = foreverdb_dump.dump_item_details(client, [1, 2, 3, 4, 5], tmp_path)
+    assert asked(session) == [] and third["already"] == 5
+
+
+def test_details_stop_cleanly_when_the_quota_runs_out(tmp_path: Path) -> None:
+    session = FakeDetails()
+    client = make_client(session)
+    session.queued = [FakeResponse(200, {"data": {"id": 1, "name": "Item 1"}}), FakeResponse(402)]
+
+    result = foreverdb_dump.dump_item_details(client, [1, 2, 4], tmp_path)
+
+    assert (result["fetched"], result["left"]) == (1, 2)
+    assert "Tageskontingent" in result["stopped"]
+    # Was bis dahin kam, ist gesichert.
+    assert foreverdb_dump.details_done(tmp_path) == {1}
+
+
+def test_a_torn_last_line_does_not_break_the_resume(tmp_path: Path) -> None:
+    (tmp_path / foreverdb_dump.DETAILS_FILE).write_text('{"id":1,"name":"Item 1"}\n{"id":2,"na', encoding="utf-8")
+
+    assert foreverdb_dump.details_done(tmp_path) == {1}

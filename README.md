@@ -168,6 +168,8 @@ alle 2.735 Luecken dort vorhanden, ueberwiegend Ausruestung. Der Schluessel steh
 python -m collector foreverdb                    # die Item-Liste, 238 Anfragen
 python -m collector foreverdb vendors quests     # weitere Listen
 python -m collector foreverdb items --max-requests 50
+python -m collector foreverdb-details            # Details der Items, die Blizzard nicht kennt
+python -m collector foreverdb-details --scope market --max-requests 500
 ```
 
 Abgelegt wird unter `data/local/foreverdb/`, eine Zeile JSON je Eintrag. Der Abzug haelt
@@ -175,7 +177,12 @@ Abgelegt wird unter `data/local/foreverdb/`, eine Zeile JSON je Eintrag. Der Abz
 Abbruch dort weiter. Gemessen an der API:
 
 - Die Liste gibt hoechstens 100 Eintraege je Anfrage her, mehr wird mit 400 abgelehnt.
-- Details wie Attribute, Effekte und Entzauberung gibt es nur einzeln, eine Anfrage je Item.
+- Details wie Haendlerpreis, Attribute, Effekte, Bindung und Entzauberung gibt es nur einzeln,
+  eine Anfrage je Item. `foreverdb-details` holt sie in `item_details.jsonl`, die
+  meistgehandelten Items zuerst, schreibt jedes sofort weg und ueberspringt beim naechsten
+  Lauf, was schon da ist. Fuer die rund 2.800 Luecken im Markt sind das gut 100 Minuten.
+- Nicht alles dort ist fuer Forever bestaetigt. Die Entzauberungs-Ergebnisse etwa tragen den
+  Vermerk `Classic data (CMaNGOS), not confirmed in Forever`.
 - Erlaubt sind 30 Anfragen je Minute und 5.000 am Tag.
 
 Drei Regeln des Anbieters bestimmen, wohin diese Daten duerfen:
@@ -214,7 +221,8 @@ die Sichten aendern oder das Projekt in einen anderen Ordner zieht.
 | `runs` | Protokoll der Sammellaeufe |
 | `blizzard_items` | Stammdaten aus Blizzards API, `raw` als JSON |
 | `foreverdb_items` | die Item-Liste von ForeverDB; weitere Listen als `foreverdb_vendors` usw. |
-| `items` | beide Quellen zusammengefuehrt: Blizzard gilt zuerst, ForeverDB fuellt auf |
+| `foreverdb_item_details` | einzeln abgezogene Details: Haendlerpreis, Attribute, Bindung, Entzauberung |
+| `items` | beide Quellen zusammengefuehrt: Blizzard gilt zuerst, ForeverDB fuellt auf - auch den Haendlerpreis |
 | `latest` | der juengste Stand mit Namen und Haendlerpreisen |
 | `history` | `snapshots` mit Namen und den Verkaeufen seit dem Stand davor |
 | `sold_daily` | Verkaeufe je Item und Tag, mit `hours_covered` |
