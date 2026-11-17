@@ -3,7 +3,7 @@ import { describe, expect, it } from "vitest"
 
 import { buildGroupIndex, spansFor } from "./data"
 import { formatPercent, kindLabel, moneyShort, splitCoins } from "./format"
-import { filterRows, itemName, nextSort, rowKey, sortRows } from "./rows"
+import { ALL, categories, filterRows, itemName, nextSort, rowKey, sortRows, subcategories } from "./rows"
 import type { MarketRow } from "./types"
 
 function row(partial: Partial<MarketRow> & Pick<MarketRow, "item_id">): MarketRow {
@@ -23,6 +23,8 @@ function row(partial: Partial<MarketRow> & Pick<MarketRow, "item_id">): MarketRo
     high_24h: null,
     open_24h: null,
     change_24h_pct: null,
+    item_class: null,
+    item_subclass: null,
     vendor_sell: null,
     vendor_buy: null,
     ...partial,
@@ -101,6 +103,36 @@ describe("Zeilen", () => {
     expect(nextSort({ key: "n_listings", dir: -1 }, "name")).toEqual({ key: "name", dir: 1 })
     expect(nextSort({ key: "n_listings", dir: -1 }, "min_price")).toEqual({ key: "min_price", dir: -1 })
     expect(nextSort({ key: "min_price", dir: -1 }, "min_price")).toEqual({ key: "min_price", dir: 1 })
+  })
+})
+
+describe("Typen", () => {
+  const rows = [
+    row({ item_id: 1, item_class: "Recipe", item_subclass: "Tailoring" }),
+    row({ item_id: 2, item_class: "Recipe", item_subclass: "Tailoring" }),
+    row({ item_id: 3, item_class: "Recipe", item_subclass: "Alchemy" }),
+    row({ item_id: 4, item_class: "Armor", item_subclass: "Cloth" }),
+    row({ item_id: 5 }),
+  ]
+
+  it("zaehlt die Typen, haeufigste zuerst, und laesst Unbekanntes weg", () => {
+    expect(categories(rows)).toEqual([
+      { value: "Recipe", count: 3 },
+      { value: "Armor", count: 1 },
+    ])
+    expect(subcategories(rows, "Recipe")).toEqual([
+      { value: "Tailoring", count: 2 },
+      { value: "Alchemy", count: 1 },
+    ])
+  })
+
+  it("filtert nach Typ und Untertyp", () => {
+    const ids = (category: string, subcategory = ALL) =>
+      filterRows(rows, "", "all", {}, category, subcategory).map((r) => r.item_id)
+    expect(ids(ALL)).toEqual([1, 2, 3, 4, 5])
+    expect(ids("Recipe")).toEqual([1, 2, 3])
+    expect(ids("Recipe", "Alchemy")).toEqual([3])
+    expect(ids("Armor", "Alchemy")).toEqual([])
   })
 })
 

@@ -91,6 +91,12 @@ export function ItemDetail({ meta, row, names, onClose }: ItemDetailProps) {
         <CardTitle className="flex flex-wrap items-center gap-3 text-lg">
           {itemName(row.item_id, names)}
           <Badge variant="outline">{kindLabel(row.kind)}</Badge>
+          {row.item_class && (
+            <Badge variant="secondary">
+              {row.item_class}
+              {row.item_subclass && row.item_subclass !== row.item_class ? ` · ${row.item_subclass}` : ""}
+            </Badge>
+          )}
           <a
             href={`https://foreverdb.net/item/${row.item_id}`}
             target="_blank"

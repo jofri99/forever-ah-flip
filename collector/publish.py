@@ -89,6 +89,23 @@ def _load_local_details(con: duckdb.DuckDBPyConnection, settings: Settings) -> N
     )
 
 
+def _load_local_list(con: duckdb.DuckDBPyConnection, settings: Settings) -> None:
+    """Typ und Untertyp aus der lokalen Item-Liste von ForeverDB, fuer Items ohne
+    Stammdaten von Blizzard. Beide Quellen benennen die Typen gleich."""
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE fdb_list (item_id INTEGER, item_class VARCHAR, item_subclass VARCHAR)"
+    )
+    target = foreverdb_dump.dump_dir(settings) / "items.jsonl"
+    if not target.is_file() or target.stat().st_size == 0:
+        return
+    con.execute(
+        f"INSERT INTO fdb_list SELECT id, any_value(\"class\"), any_value(subclass) "
+        f"FROM read_json('{store.sql_path(target)}', format = 'newline_delimited', "
+        "columns = {'id': 'INTEGER', 'class': 'VARCHAR', 'subclass': 'VARCHAR'}, ignore_errors = true) "
+        "WHERE id IS NOT NULL GROUP BY id"
+    )
+
+
 def _build_hourly(con: duckdb.DuckDBPyConnection, since: dt.datetime) -> int:
     """Eine Zeile je Item und Stand. Zeit als Unix-Sekunden, Preise als DOUBLE:
     beides kommt im Browser als gewoehnliche Zahl an, ohne BigInt und ohne Datumsobjekte."""
@@ -148,6 +165,9 @@ def _build_market(con: duckdb.DuckDBPyConnection) -> int:
                CASE WHEN day.open_24h > 0
                     THEN round((cur.min_price - day.open_24h) * 100.0 / day.open_24h, 1)
                END AS change_24h_pct,
+               -- Typ und Untertyp, z. B. Recipe / Tailoring. Fuer den Filter der Oberflaeche.
+               coalesce(k.item_class, fl.item_class)       AS item_class,
+               coalesce(k.item_subclass, fl.item_subclass) AS item_subclass,
                -- Was ein Haendler zahlt, und sein Listenpreis je Stueck. Der Listenpreis
                -- steht bei jedem Item, auch wenn es kein Haendler fuehrt.
                coalesce(k.sell_price, fd.sell_price)::DOUBLE AS vendor_sell,
@@ -157,6 +177,7 @@ def _build_market(con: duckdb.DuckDBPyConnection) -> int:
         LEFT JOIN day ON day.item_id = cur.item_id AND day.kind = cur.kind
         LEFT JOIN known k ON k.item_id = cur.item_id AND k.status = 200
         LEFT JOIN fdb_details fd ON fd.item_id = cur.item_id
+        LEFT JOIN fdb_list fl ON fl.item_id = cur.item_id
         """
     )
     return con.execute("SELECT count(*) FROM market").fetchone()[0]
@@ -187,6 +208,7 @@ def build(
         # Stammdaten (Namen, Haendlerpreise) stehen im Warehouse unter ref/items.
         names.load_known(con, settings.warehouse_dir, settings.locale)
         _load_local_details(con, settings)
+        _load_local_list(con, settings)
         market_rows = _build_market(con)
 
         store.write_parquet(

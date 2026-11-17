@@ -290,6 +290,8 @@ npm run dev                         # http://localhost:5173
 
 - Die Tabelle laesst sich nach jeder Spalte sortieren, nach Name oder ID durchsuchen und
   auf Einzelstuecke oder Stapelware einschraenken. Fehlende Werte stehen immer am Ende.
+- Ein Filter nach Typ (Recipe, Armor, Trade Goods, ...) und, sobald ein Typ gewaehlt ist,
+  nach Untertyp - bei Rezepten ist das der Beruf. Die Zahl in Klammern nennt die Items.
   Von den gut 6.000 Zeilen stehen nur die sichtbaren im Dokument.
 - Ein Klick oder Enter auf einer Zeile oeffnet den Verlauf: guenstigster Preis, Median und
   darunter die verkaufte Menge je Stand - oder die Zahl der Angebote, solange es keine

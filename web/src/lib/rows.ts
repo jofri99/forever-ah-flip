@@ -9,15 +9,47 @@ export function itemName(itemId: number, names: Names): string {
   return names[String(itemId)] ?? `Item ${itemId}`
 }
 
+/** Kennzeichnet in den Filtern "keine Einschraenkung". */
+export const ALL = "all"
+
+export interface Option {
+  value: string
+  count: number
+}
+
+function tally(values: (string | null)[]): Option[] {
+  const counts = new Map<string, number>()
+  for (const value of values) {
+    if (value) counts.set(value, (counts.get(value) ?? 0) + 1)
+  }
+  return [...counts]
+    .map(([value, count]) => ({ value, count }))
+    .sort((a, b) => b.count - a.count || a.value.localeCompare(b.value))
+}
+
+/** Die Typen, die im Markt vorkommen, haeufigste zuerst. */
+export function categories(rows: MarketRow[]): Option[] {
+  return tally(rows.map((row) => row.item_class))
+}
+
+/** Die Untertypen eines Typs - bei Rezepten die Berufe. */
+export function subcategories(rows: MarketRow[], category: string): Option[] {
+  return tally(rows.filter((row) => row.item_class === category).map((row) => row.item_subclass))
+}
+
 export function filterRows(
   rows: MarketRow[],
   query: string,
   kind: KindFilter,
   names: Names,
+  category: string = ALL,
+  subcategory: string = ALL,
 ): MarketRow[] {
   const needle = query.trim().toLowerCase()
   return rows.filter((row) => {
     if (kind !== "all" && row.kind !== kind) return false
+    if (category !== ALL && row.item_class !== category) return false
+    if (subcategory !== ALL && row.item_subclass !== subcategory) return false
     if (!needle) return true
     return (
       String(row.item_id) === needle ||

@@ -16,7 +16,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useHashSelection } from "@/hooks/use-hash-selection"
 import { loadMarket, loadMeta, loadNames } from "@/lib/data"
 import { formatDateTime, formatInt } from "@/lib/format"
-import { filterRows, nextSort, rowKey, sortRows } from "@/lib/rows"
+import { ALL, categories, filterRows, nextSort, rowKey, sortRows, subcategories } from "@/lib/rows"
 import type { KindFilter, MarketRow, Meta, Names, Sort, SortKey } from "@/lib/types"
 
 // Das Diagramm wird erst geladen, wenn jemand ein Item oeffnet - die Tabelle
@@ -51,6 +51,8 @@ export function App() {
   const [status, setStatus] = useState<Status>({ state: "loading" })
   const [query, setQuery] = useState("")
   const [kind, setKind] = useState<KindFilter>("all")
+  const [category, setCategory] = useState(ALL)
+  const [subcategory, setSubcategory] = useState(ALL)
   const [sort, setSort] = useState<Sort>({ key: "n_listings", dir: -1 })
   const [selectedKey, select] = useHashSelection()
   const deferredQuery = useDeferredValue(query)
@@ -77,8 +79,18 @@ export function App() {
 
   const rows = useMemo(() => {
     if (!ready) return []
-    return sortRows(filterRows(ready.market, deferredQuery, kind, ready.names), sort, ready.names)
-  }, [ready, deferredQuery, kind, sort])
+    return sortRows(
+      filterRows(ready.market, deferredQuery, kind, ready.names, category, subcategory),
+      sort,
+      ready.names,
+    )
+  }, [ready, deferredQuery, kind, category, subcategory, sort])
+
+  const categoryOptions = useMemo(() => (ready ? categories(ready.market) : []), [ready])
+  const subcategoryOptions = useMemo(
+    () => (ready && category !== ALL ? subcategories(ready.market, category) : []),
+    [ready, category],
+  )
 
   const selectedRow = useMemo(
     () => ready?.market.find((row) => rowKey(row) === selectedKey) ?? null,
@@ -140,15 +152,51 @@ export function App() {
               className="max-w-sm"
             />
             <Select value={kind} onValueChange={(value) => setKind(value as KindFilter)}>
-              <SelectTrigger className="w-44" aria-label="Type">
+              <SelectTrigger className="w-44" aria-label="Listing kind">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">All types</SelectItem>
+                <SelectItem value="all">All listings</SelectItem>
                 <SelectItem value="auction">Single items</SelectItem>
                 <SelectItem value="commodity">Commodities</SelectItem>
               </SelectContent>
             </Select>
+            {categoryOptions.length > 0 && (
+              <Select
+                value={category}
+                onValueChange={(value) => {
+                  setCategory(value)
+                  setSubcategory(ALL)
+                }}
+              >
+                <SelectTrigger className="w-52" aria-label="Category">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>All categories</SelectItem>
+                  {categoryOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.value} ({formatInt(option.count)})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
+            {subcategoryOptions.length > 1 && (
+              <Select value={subcategory} onValueChange={setSubcategory}>
+                <SelectTrigger className="w-52" aria-label="Subcategory">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value={ALL}>All subcategories</SelectItem>
+                  {subcategoryOptions.map((option) => (
+                    <SelectItem key={option.value} value={option.value}>
+                      {option.value} ({formatInt(option.count)})
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            )}
             <span className="text-sm text-muted-foreground">
               {formatInt(rows.length)} {rows.length === 1 ? "item" : "items"}
             </span>
