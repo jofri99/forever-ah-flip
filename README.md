@@ -16,10 +16,26 @@ items/house=114/dt=2026-11-17/081855.parquet   je Item eine Zeile
 sales/house=114/dt=2026-11-17/081855.parquet   Vergleich mit dem Stand davor
 runs/house=114/dt=2026-11-17/081855.parquet    eine Zeile Protokoll
 latest/house=114.json                          Zeiger auf den juengsten Stand
+ref/items/dt=2026-11-17.parquet                Namen und Stammdaten der an dem Tag geprueften Items
 ```
 
-`latest/house=114.json` ist die einzige Datei, die ueberschrieben wird. Wer die Daten per
-HTTPS liest statt per Git, findet dort den Pfad der neuesten `items`-Datei.
+`latest/house=114.json` wird ueberschrieben, und die `ref`-Datei des laufenden Tages waechst
+um neu gepruefte Items. Alles andere bleibt unveraendert. Wer die Daten per HTTPS liest statt
+per Git, findet im Zeiger den Pfad der neuesten `items`-Datei.
+
+### ref/items
+
+Aus Blizzards statischer API (`static-forever-eu`, deutsch). Sie kennt laengst nicht jedes
+Item; auch Fehlanzeigen stehen hier, damit sie nicht stuendlich neu abgefragt werden.
+
+| Spalte | Bedeutung |
+|---|---|
+| `item_id` | Item |
+| `status` | 200 = gefunden, 404 = kennt die API nicht |
+| `name`, `quality` | Name und Qualitaet (`COMMON`, `RARE`, ...) |
+| `sell_price` | Preis, den ein Haendler zahlt, in Kupfer |
+| `item_class`, `item_subclass`, `level`, `required_level`, `is_stackable` | Einordnung |
+| `checked_at` | wann geprueft; je Item gilt die juengste Zeile |
 
 ### items
 
