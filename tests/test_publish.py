@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from collector import publish, store
+from collector import foreverdb_dump, publish, store
 from collector.config import Settings
 
 T0 = dt.datetime(2026, 11, 14, 10, 0, 0)
@@ -187,3 +187,44 @@ def test_meta_json_describes_the_build(warehouse: Settings, tmp_path: Path) -> N
 def test_empty_warehouse_is_a_clear_error(settings: Settings, tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="noch kein Stand"):
         publish.build(settings, out_dir=tmp_path / "site")
+
+
+def test_vendor_flips_exist_only_with_a_local_vendor_dump(warehouse: Settings, tmp_path: Path) -> None:
+    out = tmp_path / "site"
+
+    # Ohne Abzug der Haendler - so laeuft es in Actions - gibt es die Datei nicht.
+    meta = publish.build(warehouse, out_dir=out)
+    assert meta["vendor_flips"] is None
+    assert not (out / publish.VENDOR_FLIPS).exists()
+
+    # Item 100 steht im Auktionshaus fuer 550, Item 300 fuer 99.
+    directory = foreverdb_dump.dump_dir(warehouse)
+    directory.mkdir(parents=True)
+    (directory / foreverdb_dump.VENDOR_DETAILS_FILE).write_text(
+        '{"id":1,"name":"Horde Vendor","side":"Horde","zone":"Orgrimmar","sells":['
+        '{"itemId":100,"price":200,"stack":1,"pricePerItem":200.0,"limited":true,"limitedStockCount":1,"seenInForever":true},'
+        '{"itemId":300,"price":98,"stack":1,"pricePerItem":98.0,"limited":false,"seenInForever":true}]}\n'
+        '{"id":2,"name":"Alliance Vendor","side":"Alliance","zone":"Stormwind","sells":['
+        '{"itemId":300,"price":1,"stack":1,"pricePerItem":1.0,"limited":false,"seenInForever":true}]}\n',
+        encoding="utf-8",
+    )
+    meta = publish.build(warehouse, out_dir=out)
+    assert meta["vendor_flips"] == 1
+
+    rows = query(
+        out / publish.VENDOR_FLIPS,
+        "SELECT item_id, kind, vendor_price, ah_price, profit, profit_pct, limited, limited_stock, vendor, "
+        "qty_sold_24h FROM FILE",
+    )
+    # Item 100: 550 * 0,95 - 200 = 322,5, gerundet 323. Item 300 lohnt nur beim Haendler der Allianz,
+    # und der ist fuer die Horde nicht erreichbar: 99 * 0,95 liegt unter 98.
+    assert rows == [(100, "auction", 200.0, 550.0, 323.0, 161.0, True, 1, "Horde Vendor", 1.0)]
+
+    types = dict(query(out / publish.VENDOR_FLIPS, "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM FILE)"))
+    assert "BIGINT" not in types.values()
+
+    # Verschwindet der Abzug, darf keine veraltete Datei liegen bleiben.
+    (directory / foreverdb_dump.VENDOR_DETAILS_FILE).unlink()
+    meta = publish.build(warehouse, out_dir=out)
+    assert meta["vendor_flips"] is None
+    assert not (out / publish.VENDOR_FLIPS).exists()

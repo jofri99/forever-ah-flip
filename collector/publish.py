@@ -30,6 +30,11 @@ HOURLY = "hourly.parquet"
 MARKET = "market.parquet"
 META = "meta.json"
 NAMES = "names.json"      # optional: {"2589": "Leinenstoff", ...}
+VENDOR_FLIPS = "vendor_flips.parquet"   # optional, nur mit lokalem Abzug von ForeverDB
+
+# Gesammelt wird das Auktionshaus der Horde. Haendler dieser Fraktion sind von dort
+# aus nicht erreichbar.
+UNREACHABLE_SIDE = "Alliance"
 
 DEFAULT_OUT = ROOT / "web" / "public" / "data"
 DEFAULT_DAYS = 14
@@ -183,6 +188,50 @@ def _build_market(con: duckdb.DuckDBPyConnection) -> int:
     return con.execute("SELECT count(*) FROM market").fetchone()[0]
 
 
+def _build_vendor_flips(con: duckdb.DuckDBPyConnection, settings: Settings) -> int | None:
+    """Beim Haendler kaufen, im Auktionshaus verkaufen.
+
+    Je Item der guenstigste erreichbare Haendler gegen das guenstigste Angebot im
+    Auktionshaus, Gewinn nach 5 % Gebuehr. Setzt die Tabelle `market` voraus. Gibt None
+    zurueck, wenn es keinen Abzug der Haendler gibt - in Actions also immer.
+    """
+    from . import db        # hier, um einen Importkreis zu vermeiden
+
+    source = db.vendor_details_source(settings)
+    if source is None:
+        return None
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE vendor_flips AS
+        WITH offers AS (
+            SELECT v.name AS vendor, v.zone, v.side, v.reputationFaction.name AS reputation,
+                   s.itemId AS item_id, s.pricePerItem AS price_per_item, s.limited,
+                   s.limitedStockCount AS limited_stock, s.seenInForever AS seen_in_forever, v.id AS vendor_id
+            FROM ({source}) v, unnest(v.sells) AS t(s)
+            WHERE v.side <> '{UNREACHABLE_SIDE}' AND s.pricePerItem > 0
+        ),
+        cheapest AS (
+            SELECT * FROM offers
+            QUALIFY row_number() OVER (PARTITION BY item_id ORDER BY price_per_item, vendor_id) = 1
+        )
+        SELECT m.item_id, m.kind, m.item_class, m.item_subclass,
+               c.price_per_item::DOUBLE                       AS vendor_price,
+               m.min_price                                    AS ah_price,
+               round(m.min_price * 0.95 - c.price_per_item)   AS profit,
+               round((m.min_price * 0.95 - c.price_per_item) * 100.0 / c.price_per_item)
+                                                              AS profit_pct,
+               m.n_listings, m.qty_sold_24h, m.sales_hours_24h,
+               coalesce(c.limited, false)                     AS limited,
+               c.limited_stock::INTEGER                       AS limited_stock,
+               c.vendor, c.zone, c.side, c.reputation,
+               c.seen_in_forever
+        FROM market m JOIN cheapest c USING (item_id)
+        WHERE m.min_price * 0.95 > c.price_per_item
+        """
+    )
+    return con.execute("SELECT count(*) FROM vendor_flips").fetchone()[0]
+
+
 def _iso(epoch_seconds: int | None) -> str | None:
     if epoch_seconds is None:
         return None
@@ -220,6 +269,17 @@ def build(
             con, "market", out_dir / MARKET,
             order_by="item_id, kind", compression=COMPRESSION,
         )
+
+        # Haendler-Flips gibt es nur mit dem lokalen Abzug. Eine alte Datei darf nicht
+        # liegen bleiben, wenn der Abzug fehlt - sie wuerde veraltete Zahlen zeigen.
+        flip_rows = _build_vendor_flips(con, settings)
+        if flip_rows is None:
+            (out_dir / VENDOR_FLIPS).unlink(missing_ok=True)
+        else:
+            store.write_parquet(
+                con, "vendor_flips", out_dir / VENDOR_FLIPS,
+                order_by="profit DESC, item_id", compression=COMPRESSION,
+            )
 
         # Ohne Namen zeigt die Seite "Item 2589". Zuerst gilt Blizzards Name. Wo Blizzard
         # ein Item nicht kennt, fuellt ein lokaler Abzug von ForeverDB auf - den gibt es
@@ -262,6 +322,8 @@ def build(
         # Die Seite fragt names.json nur ab, wenn hier true steht.
         "names": (out_dir / NAMES).is_file(),
         "items_with_name": named_in_market,
+        # Die Seite zeigt die Ansicht nur, wenn hier eine Zahl steht.
+        "vendor_flips": flip_rows,
         "name_sources": {"blizzard": named_official, "foreverdb": named_in_market - named_official},
         "files": {
             HOURLY: {
@@ -294,6 +356,8 @@ def main(settings: Settings, out_dir: Path | None = None, house: int | None = No
         f"{hourly['row_groups']} Zeilengruppen"
     )
     print(f"  {MARKET:<15} {market['rows']:>9,} Zeilen, {market['bytes'] / 1024:>8,.0f} KB")
+    if meta["vendor_flips"] is not None:
+        print(f"  {VENDOR_FLIPS:<15} {meta['vendor_flips']:>9,} Zeilen")
     sources = meta["name_sources"]
     print(
         f"  Namen fuer {meta['items_with_name']:,} von {meta['items']:,} Items "

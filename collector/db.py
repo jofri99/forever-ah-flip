@@ -177,21 +177,28 @@ def _foreverdb_views(con: duckdb.DuckDBPyConnection, settings: Settings) -> list
 
     # Die Haendler mit Sortiment. Feste Spalten, damit die Sicht vendor_items auch dann
     # traegt, wenn ein Feld in den bisher abgezogenen Zeilen noch nie vorkam.
-    vendors = directory / foreverdb_dump.VENDOR_DETAILS_FILE
-    if vendors.is_file() and vendors.stat().st_size > 0:
-        columns = "{" + ", ".join(
-            f"'{part.split(' ', 1)[0]}': '{part.split(' ', 1)[1]}'"
-            for part in _split_columns(EMPTY["foreverdb_vendor_details"])
-        ) + "}"
-        con.execute(
-            f"CREATE OR REPLACE VIEW foreverdb_vendor_details AS SELECT * FROM read_json("
-            f"'{store.sql_path(vendors)}', format = 'newline_delimited', columns = {columns}, "
-            "ignore_errors = true) WHERE id IS NOT NULL"
-        )
+    source = vendor_details_source(settings)
+    if source is not None:
+        con.execute(f"CREATE OR REPLACE VIEW foreverdb_vendor_details AS {source}")
         created.append("foreverdb_vendor_details")
     else:
         _empty_view(con, "foreverdb_vendor_details", EMPTY["foreverdb_vendor_details"])
     return created
+
+
+def vendor_details_source(settings: Settings) -> str | None:
+    """Die abgezogenen Haendler als Abfrage, oder None, wenn es den Abzug nicht gibt."""
+    vendors = foreverdb_dump.dump_dir(settings) / foreverdb_dump.VENDOR_DETAILS_FILE
+    if not vendors.is_file() or vendors.stat().st_size == 0:
+        return None
+    columns = "{" + ", ".join(
+        f"'{part.split(' ', 1)[0]}': '{part.split(' ', 1)[1]}'"
+        for part in _split_columns(EMPTY["foreverdb_vendor_details"])
+    ) + "}"
+    return (
+        f"SELECT * FROM read_json('{store.sql_path(vendors)}', format = 'newline_delimited', "
+        f"columns = {columns}, ignore_errors = true) WHERE id IS NOT NULL"
+    )
 
 
 def _split_columns(definition: str) -> list[str]:

@@ -1,10 +1,12 @@
 import { lazy, Suspense, useDeferredValue, useEffect, useMemo, useState } from "react"
 import { Moon, Sun } from "lucide-react"
 
+import { FlipTable } from "@/components/flip-table"
 import { MarketTable } from "@/components/market-table"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
+import { Label } from "@/components/ui/label"
 import {
   Select,
   SelectContent,
@@ -13,11 +15,32 @@ import {
   SelectValue,
 } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
+import { Switch } from "@/components/ui/switch"
+import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useHashSelection } from "@/hooks/use-hash-selection"
-import { loadMarket, loadMeta, loadNames } from "@/lib/data"
+import { loadMarket, loadMeta, loadNames, loadVendorFlips } from "@/lib/data"
 import { formatDateTime, formatInt } from "@/lib/format"
-import { ALL, categories, filterRows, nextSort, rowKey, sortRows, subcategories } from "@/lib/rows"
-import type { KindFilter, MarketRow, Meta, Names, Sort, SortKey } from "@/lib/types"
+import {
+  ALL,
+  categories,
+  filterFlips,
+  filterRows,
+  nextSort,
+  rowKey,
+  sortFlips,
+  sortRows,
+  subcategories,
+} from "@/lib/rows"
+import type {
+  FlipSortKey,
+  KindFilter,
+  MarketRow,
+  Meta,
+  Names,
+  Sort,
+  SortKey,
+  VendorFlip,
+} from "@/lib/types"
 
 // Das Diagramm wird erst geladen, wenn jemand ein Item oeffnet - die Tabelle
 // steht damit, bevor die Diagramm-Bibliothek ueberhaupt angefragt wurde.
@@ -28,7 +51,9 @@ const ItemDetail = lazy(() =>
 type Status =
   | { state: "loading" }
   | { state: "error"; message: string }
-  | { state: "ready"; meta: Meta; market: MarketRow[]; names: Names }
+  | { state: "ready"; meta: Meta; market: MarketRow[]; names: Names; flips: VendorFlip[] }
+
+type View = "market" | "flips"
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
@@ -49,11 +74,15 @@ function ThemeToggle() {
 
 export function App() {
   const [status, setStatus] = useState<Status>({ state: "loading" })
+  const [view, setView] = useState<View>("market")
   const [query, setQuery] = useState("")
   const [kind, setKind] = useState<KindFilter>("all")
   const [category, setCategory] = useState(ALL)
   const [subcategory, setSubcategory] = useState(ALL)
   const [sort, setSort] = useState<Sort>({ key: "n_listings", dir: -1 })
+  const [flipSort, setFlipSort] = useState<Sort<FlipSortKey>>({ key: "profit", dir: -1 })
+  const [unlimitedOnly, setUnlimitedOnly] = useState(false)
+  const [soldOnly, setSoldOnly] = useState(false)
   const [selectedKey, select] = useHashSelection()
   const deferredQuery = useDeferredValue(query)
 
@@ -62,8 +91,12 @@ export function App() {
     ;(async () => {
       try {
         const meta = await loadMeta()
-        const [market, names] = await Promise.all([loadMarket(meta), loadNames(meta)])
-        if (!cancelled) setStatus({ state: "ready", meta, market, names })
+        const [market, names, flips] = await Promise.all([
+          loadMarket(meta),
+          loadNames(meta),
+          loadVendorFlips(meta),
+        ])
+        if (!cancelled) setStatus({ state: "ready", meta, market, names, flips })
       } catch (error) {
         if (!cancelled) {
           setStatus({ state: "error", message: error instanceof Error ? error.message : String(error) })
@@ -76,8 +109,11 @@ export function App() {
   }, [])
 
   const ready = status.state === "ready" ? status : null
+  // Haendler-Flips gibt es nur mit lokalem Abzug. Ohne sie bleibt es bei der einen Ansicht.
+  const hasFlips = (ready?.flips.length ?? 0) > 0
+  const showFlips = view === "flips" && hasFlips
 
-  const rows = useMemo(() => {
+  const marketRows = useMemo(() => {
     if (!ready) return []
     return sortRows(
       filterRows(ready.market, deferredQuery, kind, ready.names, category, subcategory),
@@ -86,16 +122,26 @@ export function App() {
     )
   }, [ready, deferredQuery, kind, category, subcategory, sort])
 
-  const categoryOptions = useMemo(() => (ready ? categories(ready.market) : []), [ready])
+  const flipRows = useMemo(() => {
+    if (!ready) return []
+    const filtered = filterRows(ready.flips, deferredQuery, "all", ready.names, category, subcategory)
+    return sortFlips(filterFlips(filtered, { unlimitedOnly, soldOnly }), flipSort, ready.names)
+  }, [ready, deferredQuery, category, subcategory, unlimitedOnly, soldOnly, flipSort])
+
+  // Die Auswahl der Typen richtet sich nach dem, was die gerade gezeigte Ansicht enthaelt.
+  const source = ready ? (showFlips ? ready.flips : ready.market) : null
+  const categoryOptions = useMemo(() => (source ? categories(source) : []), [source])
   const subcategoryOptions = useMemo(
-    () => (ready && category !== ALL ? subcategories(ready.market, category) : []),
-    [ready, category],
+    () => (source && category !== ALL ? subcategories(source, category) : []),
+    [source, category],
   )
 
   const selectedRow = useMemo(
     () => ready?.market.find((row) => rowKey(row) === selectedKey) ?? null,
     [ready, selectedKey],
   )
+
+  const shown = showFlips ? flipRows.length : marketRows.length
 
   return (
     <div className="mx-auto flex min-h-svh max-w-7xl flex-col gap-4 p-4 md:p-6">
@@ -142,6 +188,31 @@ export function App() {
             </Suspense>
           )}
 
+          {hasFlips && (
+            <Tabs
+              value={view}
+              onValueChange={(value) => {
+                setView(value as View)
+                // Die beiden Ansichten kennen verschiedene Typen.
+                setCategory(ALL)
+                setSubcategory(ALL)
+              }}
+            >
+              <TabsList>
+                <TabsTrigger value="market">Market</TabsTrigger>
+                <TabsTrigger value="flips">Vendor flips ({formatInt(ready.flips.length)})</TabsTrigger>
+              </TabsList>
+            </Tabs>
+          )}
+
+          {showFlips && (
+            <p className="text-sm text-muted-foreground">
+              Buy from a vendor, sell on the auction house. Profit is per unit, after the 5% auction
+              house cut, against the lowest current listing. Vendor stock comes from ForeverDB and is
+              not checked in game: a vendor may require reputation, and limited stock restocks slowly.
+            </p>
+          )}
+
           <div className="flex flex-wrap items-center gap-3">
             <Input
               type="search"
@@ -151,16 +222,18 @@ export function App() {
               aria-label="Search item or ID"
               className="max-w-sm"
             />
-            <Select value={kind} onValueChange={(value) => setKind(value as KindFilter)}>
-              <SelectTrigger className="w-44" aria-label="Listing kind">
-                <SelectValue />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All listings</SelectItem>
-                <SelectItem value="auction">Single items</SelectItem>
-                <SelectItem value="commodity">Commodities</SelectItem>
-              </SelectContent>
-            </Select>
+            {!showFlips && (
+              <Select value={kind} onValueChange={(value) => setKind(value as KindFilter)}>
+                <SelectTrigger className="w-44" aria-label="Listing kind">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All listings</SelectItem>
+                  <SelectItem value="auction">Single items</SelectItem>
+                  <SelectItem value="commodity">Commodities</SelectItem>
+                </SelectContent>
+              </Select>
+            )}
             {categoryOptions.length > 0 && (
               <Select
                 value={category}
@@ -197,19 +270,42 @@ export function App() {
                 </SelectContent>
               </Select>
             )}
+            {showFlips && (
+              <>
+                <div className="flex items-center gap-2">
+                  <Switch id="unlimited" checked={unlimitedOnly} onCheckedChange={setUnlimitedOnly} />
+                  <Label htmlFor="unlimited">Unlimited stock only</Label>
+                </div>
+                <div className="flex items-center gap-2">
+                  <Switch id="sold" checked={soldOnly} onCheckedChange={setSoldOnly} />
+                  <Label htmlFor="sold">Sold in last 24h</Label>
+                </div>
+              </>
+            )}
             <span className="text-sm text-muted-foreground">
-              {formatInt(rows.length)} {rows.length === 1 ? "item" : "items"}
+              {formatInt(shown)} {shown === 1 ? "item" : "items"}
             </span>
           </div>
 
-          <MarketTable
-            rows={rows}
-            names={ready.names}
-            sort={sort}
-            selectedKey={selectedKey}
-            onSort={(key: SortKey) => setSort((current) => nextSort(current, key))}
-            onSelect={select}
-          />
+          {showFlips ? (
+            <FlipTable
+              rows={flipRows}
+              names={ready.names}
+              sort={flipSort}
+              selectedKey={selectedKey}
+              onSort={(key: FlipSortKey) => setFlipSort((current) => nextSort(current, key))}
+              onSelect={select}
+            />
+          ) : (
+            <MarketTable
+              rows={marketRows}
+              names={ready.names}
+              sort={sort}
+              selectedKey={selectedKey}
+              onSort={(key: SortKey) => setSort((current) => nextSort(current, key))}
+              onSelect={select}
+            />
+          )}
         </>
       )}
 
@@ -224,10 +320,10 @@ export function App() {
           TradingView Lightweight Charts
         </a>
         .
-        {ready?.meta.name_sources && ready.meta.name_sources.foreverdb > 0 && (
+        {ready && ((ready.meta.name_sources?.foreverdb ?? 0) > 0 || hasFlips) && (
           <>
             {" "}
-            Some names from{" "}
+            Some names and all vendor data from{" "}
             <a
               href="https://foreverdb.net"
               target="_blank"

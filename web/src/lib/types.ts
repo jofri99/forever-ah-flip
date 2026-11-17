@@ -55,6 +55,8 @@ export interface Meta {
   names: boolean
   /** Wie viele Items im Markt ihren Namen aus welcher Quelle haben. */
   name_sources?: { blizzard: number; foreverdb: number }
+  /** Zahl der Haendler-Flips, oder null, wenn es die Datei nicht gibt. */
+  vendor_flips?: number | null
 }
 
 /** Item-ID als Text -> Name. Fehlt ein Eintrag, zeigt die Seite "Item 2589". */
@@ -70,10 +72,46 @@ export type SortKey =
   | "qty_sold_24h"
   | "value_sold_24h"
 
-export interface Sort {
-  key: SortKey
+export interface Sort<K extends string = SortKey> {
+  key: K
   /** 1 aufsteigend, -1 absteigend. */
   dir: 1 | -1
 }
 
 export type KindFilter = "all" | Kind
+
+/** Eine Zeile aus vendor_flips.parquet: beim Haendler kaufen, im Auktionshaus verkaufen. */
+export interface VendorFlip {
+  item_id: number
+  kind: Kind
+  item_class: string | null
+  item_subclass: string | null
+  /** Preis je Stueck beim guenstigsten erreichbaren Haendler. */
+  vendor_price: number
+  /** Guenstigstes Angebot im Auktionshaus. */
+  ah_price: number
+  /** Gewinn je Stueck nach 5 % Gebuehr des Auktionshauses. */
+  profit: number
+  profit_pct: number
+  n_listings: number
+  qty_sold_24h: number | null
+  sales_hours_24h: number | null
+  /** Der Haendler hat nur einen begrenzten Bestand. */
+  limited: boolean
+  limited_stock: number | null
+  vendor: string
+  zone: string | null
+  side: string
+  reputation: string | null
+  seen_in_forever: boolean | null
+}
+
+export type FlipSortKey =
+  | "name"
+  | "vendor_price"
+  | "ah_price"
+  | "profit"
+  | "profit_pct"
+  | "n_listings"
+  | "qty_sold_24h"
+  | "vendor"

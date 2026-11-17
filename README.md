@@ -277,6 +277,8 @@ python -m collector publish --days 30
 | `hourly.parquet` | alle Staende des Zeitfensters mit Preisen, Mengen und Verkaeufen, nach Item sortiert und in Zeilengruppen von 8192 geschnitten |
 | `market.parquet` | der juengste Stand, eine Zeile je Item, dazu Tief, Hoch, Veraenderung und Verkaeufe der letzten 24 Stunden |
 | `meta.json` | Zeitraum, Anzahl Staende, Dateigroessen |
+| `names.json` | Item-ID zu Name, nur fuer Items im Zeitfenster |
+| `vendor_flips.parquet` | nur mit lokalem Abzug der Haendler: Items, die im Auktionshaus mehr bringen, als sie beim Haendler kosten |
 
 Wer ein Item will, liest am Ende von `hourly.parquet` nach, in welcher Zeilengruppe es
 liegt, und holt nur die. Zeit steht als Unix-Sekunden drin, Preise als `DOUBLE` - beides
@@ -307,6 +309,11 @@ npm run dev                         # http://localhost:5173
 - Ein Filter nach Typ (Recipe, Armor, Trade Goods, ...) und, sobald ein Typ gewaehlt ist,
   nach Untertyp - bei Rezepten ist das der Beruf. Die Zahl in Klammern nennt die Items.
   Von den gut 6.000 Zeilen stehen nur die sichtbaren im Dokument.
+- Der Reiter **Vendor flips** zeigt, was sich beim Haendler kaufen und im Auktionshaus
+  teurer verkaufen laesst: Haendlerpreis, guenstigstes Angebot, Gewinn nach 5 % Gebuehr,
+  Verkaeufe der letzten 24 Stunden, Haendler und Zone. Zwei Schalter blenden begrenzten
+  Bestand und Items ohne Verkaeufe aus. Den Reiter gibt es nur, wenn lokal ein Abzug der
+  Haendler von ForeverDB vorliegt - auf einer oeffentlichen Seite also nicht.
 - Ein Klick oder Enter auf einer Zeile oeffnet den Verlauf: guenstigster Preis, Median und
   darunter die verkaufte Menge je Stand - oder die Zahl der Angebote, solange es keine
   Verkaufsdaten gibt.
@@ -320,7 +327,8 @@ web/src/
   lib/data.ts        liest meta.json, market.parquet und gezielt aus hourly.parquet
   lib/rows.ts        Filtern und Sortieren als reine Funktionen
   lib/format.ts      Gold/Silber/Kupfer, Prozente, Ortszeit fuer das Diagramm
-  components/        Tabelle, Detailansicht, Diagramm; ui/ kommt von shadcn
+  components/        Markt- und Flip-Tabelle auf einer gemeinsamen virtuellen Tabelle,
+                     Detailansicht, Diagramm; ui/ kommt von shadcn
   hooks/             das gewaehlte Item in der Adresse
 ```
 

@@ -3,8 +3,19 @@ import { describe, expect, it } from "vitest"
 
 import { buildGroupIndex, spansFor } from "./data"
 import { formatPercent, kindLabel, moneyShort, splitCoins } from "./format"
-import { ALL, categories, filterRows, itemName, nextSort, rowKey, sortRows, subcategories } from "./rows"
-import type { MarketRow } from "./types"
+import {
+  ALL,
+  categories,
+  filterFlips,
+  filterRows,
+  itemName,
+  nextSort,
+  rowKey,
+  sortFlips,
+  sortRows,
+  subcategories,
+} from "./rows"
+import type { MarketRow, VendorFlip } from "./types"
 
 function row(partial: Partial<MarketRow> & Pick<MarketRow, "item_id">): MarketRow {
   return {
@@ -133,6 +144,59 @@ describe("Typen", () => {
     expect(ids("Recipe")).toEqual([1, 2, 3])
     expect(ids("Recipe", "Alchemy")).toEqual([3])
     expect(ids("Armor", "Alchemy")).toEqual([])
+  })
+})
+
+describe("Haendler-Flips", () => {
+  const flip = (partial: Partial<VendorFlip> & Pick<VendorFlip, "item_id">): VendorFlip => ({
+    kind: "auction",
+    item_class: "Recipe",
+    item_subclass: "Tailoring",
+    vendor_price: 100,
+    ah_price: 200,
+    profit: 90,
+    profit_pct: 90,
+    n_listings: 1,
+    qty_sold_24h: null,
+    sales_hours_24h: null,
+    limited: false,
+    limited_stock: null,
+    vendor: "Mahu",
+    zone: "Thunder Bluff",
+    side: "Horde",
+    reputation: null,
+    seen_in_forever: true,
+    ...partial,
+  })
+  const flips = [
+    flip({ item_id: 1, profit: 500, limited: true, qty_sold_24h: 2, vendor: "Qia" }),
+    flip({ item_id: 2, profit: 900, qty_sold_24h: 0, vendor: "Happy Camper" }),
+    flip({ item_id: 3, profit: 100, qty_sold_24h: 7, vendor: "Mahu" }),
+  ]
+
+  it("sortiert nach Gewinn und nach Haendler", () => {
+    expect(sortFlips(flips, { key: "profit", dir: -1 }, {}).map((f) => f.item_id)).toEqual([2, 1, 3])
+    expect(sortFlips(flips, { key: "vendor", dir: 1 }, {}).map((f) => f.item_id)).toEqual([2, 3, 1])
+    // Ohne Verkaufsdaten ans Ende, auch absteigend.
+    const withGap = [...flips, flip({ item_id: 4, qty_sold_24h: null })]
+    expect(sortFlips(withGap, { key: "qty_sold_24h", dir: -1 }, {}).map((f) => f.item_id)).toEqual([3, 1, 2, 4])
+  })
+
+  it("blendet begrenzten Bestand und Ladenhueter aus", () => {
+    const ids = (unlimitedOnly: boolean, soldOnly: boolean) =>
+      filterFlips(flips, { unlimitedOnly, soldOnly }).map((f) => f.item_id)
+    expect(ids(false, false)).toEqual([1, 2, 3])
+    expect(ids(true, false)).toEqual([2, 3])
+    // 0 verkauft zaehlt nicht als verkauft.
+    expect(ids(false, true)).toEqual([1, 3])
+    expect(ids(true, true)).toEqual([3])
+  })
+
+  it("laesst sich wie der Markt nach Typ und Namen filtern", () => {
+    const names = { "3": "Pattern: Red Linen Bag" }
+    expect(filterRows(flips, "linen", "all", names).map((f) => f.item_id)).toEqual([3])
+    expect(filterRows(flips, "", "all", names, "Recipe", "Alchemy")).toEqual([])
+    expect(nextSort({ key: "profit", dir: -1 }, "vendor")).toEqual({ key: "vendor", dir: 1 })
   })
 })
 

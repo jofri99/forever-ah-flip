@@ -6,7 +6,7 @@ import {
 } from "hyparquet"
 import type { AsyncBuffer, FileMetaData } from "hyparquet"
 
-import type { Kind, MarketRow, Meta, Names, SeriesPoint } from "./types"
+import type { Kind, MarketRow, Meta, Names, SeriesPoint, VendorFlip } from "./types"
 
 const DATA_URL = `${import.meta.env.BASE_URL}data/`
 
@@ -79,6 +79,18 @@ export async function loadMarket(meta: Meta): Promise<MarketRow[]> {
   if (!response.ok) throw new Error(`market.parquet: HTTP ${response.status}`)
   const rows = await parquetReadObjects({ file: await response.arrayBuffer() })
   return rows as MarketRow[]
+}
+
+/**
+ * Haendler-Flips gibt es nur, wenn lokal ein Abzug der Haendler vorliegt.
+ * meta.json nennt dann ihre Zahl; sonst kommt eine leere Liste zurueck.
+ */
+export async function loadVendorFlips(meta: Meta): Promise<VendorFlip[]> {
+  if (meta.vendor_flips == null) return []
+  const response = await fetch(versioned("vendor_flips.parquet", meta))
+  if (!response.ok) return []
+  const rows = await parquetReadObjects({ file: await response.arrayBuffer() })
+  return rows as VendorFlip[]
 }
 
 /** Namen sind optional. meta.json sagt, ob es die Datei gibt. */
