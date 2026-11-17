@@ -178,6 +178,11 @@ def test_meta_json_describes_the_build(warehouse: Settings, tmp_path: Path) -> N
     assert meta["files"][publish.HOURLY]["sorted_by"] == ["item_id", "kind", "ts"]
     assert meta["files"][publish.HOURLY]["bytes"] == (out / publish.HOURLY).stat().st_size
 
+    # Ohne names.json fragt die Seite gar nicht erst danach.
+    assert meta["names"] is False
+    (out / publish.NAMES).write_text('{"100": "Testitem"}', encoding="utf-8")
+    assert publish.build(warehouse, out_dir=out)["names"] is True
+
 
 def test_empty_warehouse_is_a_clear_error(settings: Settings, tmp_path: Path) -> None:
     with pytest.raises(RuntimeError, match="noch kein Stand"):

@@ -29,6 +29,7 @@ from .config import ROOT, Settings
 HOURLY = "hourly.parquet"
 MARKET = "market.parquet"
 META = "meta.json"
+NAMES = "names.json"      # optional: {"2589": "Leinenstoff", ...}
 
 DEFAULT_OUT = ROOT / "site" / "data"
 DEFAULT_DAYS = 14
@@ -190,6 +191,8 @@ def build(
         "snapshots": snapshots,
         "snapshots_with_sales": with_sales,
         "items": market_rows,
+        # Die Seite fragt names.json nur ab, wenn hier true steht.
+        "names": (out_dir / NAMES).is_file(),
         "files": {
             HOURLY: {
                 "rows": hourly_rows,

@@ -140,6 +140,36 @@ Vergleiche gedeckt sind. Steht dort 6, sind die Verkaufszahlen ein Viertel der W
 Die Dateien sind abgeleitet und jederzeit neu baubar, `site/data/` steht deshalb in
 `.gitignore`.
 
+### Die Seite
+
+`site/index.html` zeigt den Markt als Tabelle und den Preisverlauf eines Items als
+Diagramm. Lokal ansehen:
+
+```powershell
+git -C data/warehouse pull          # frische Daten holen
+python -m collector publish         # Dateien fuer die Anzeige bauen
+python tools/serve.py               # http://127.0.0.1:8777
+```
+
+`tools/serve.py` statt `python -m http.server`, weil der Server aus der Standardbibliothek
+keine Teilabrufe kann - und ohne die muesste die Seite fuer jedes Diagramm die ganze
+`hourly.parquet` laden.
+
+- Die Tabelle laesst sich nach jeder Spalte sortieren, nach Name oder ID durchsuchen und
+  auf Einzelstuecke oder Stapelware einschraenken. Fehlende Werte stehen immer am Ende.
+- Ein Klick auf eine Zeile oeffnet den Verlauf: guenstigster Preis, Median und darunter die
+  verkaufte Menge je Stand - oder die Zahl der Angebote, solange es keine Verkaufsdaten gibt.
+- Die Adresse merkt sich das Item (`#12359:commodity`), ein Verlauf laesst sich also verlinken.
+- Zeiten stehen in Ortszeit, hell und dunkel folgen dem System.
+
+Zwei Bibliotheken kommen von jsDelivr, mit fester Version: `hyparquet` 1.33.0 liest die
+Parquet-Dateien (22 KB uebertragen), TradingViews `lightweight-charts` 5.2.1 zeichnet das
+Diagramm (63 KB). Letztere steht unter Apache-2.0 und verlangt die Namensnennung samt Link,
+die im Diagramm und in der Fusszeile steht.
+
+Item-Namen fehlen noch: die API liefert nur IDs. Liegt eine `site/data/names.json` der Form
+`{"2589": "Leinenstoff"}` vor, zeigt die Seite Namen statt `Item 2589`.
+
 ### Wie Verkaeufe entstehen
 
 Auktionen haben IDs. Verschwindet eine zwischen zwei Staenden, wird sie danach eingeordnet,
