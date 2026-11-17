@@ -170,6 +170,7 @@ python -m collector foreverdb vendors quests     # weitere Listen
 python -m collector foreverdb items --max-requests 50
 python -m collector foreverdb-details            # Details der Items, die Blizzard nicht kennt
 python -m collector foreverdb-details --scope market --max-requests 500
+python -m collector foreverdb-vendors            # alle Haendler samt Sortiment und Preisen
 ```
 
 Abgelegt wird unter `data/local/foreverdb/`, eine Zeile JSON je Eintrag. Der Abzug haelt
@@ -222,6 +223,8 @@ die Sichten aendern oder das Projekt in einen anderen Ordner zieht.
 | `blizzard_items` | Stammdaten aus Blizzards API, `raw` als JSON |
 | `foreverdb_items` | die Item-Liste von ForeverDB; weitere Listen als `foreverdb_vendors` usw. |
 | `foreverdb_item_details` | einzeln abgezogene Details: Haendlerpreis, Attribute, Bindung, Entzauberung |
+| `vendor_items` | was welcher Haendler verkauft: Preis je Stueck, Fraktion, Zone, begrenzter Bestand |
+| `vendor_flips` | beim Haendler kaufen, im Auktionshaus verkaufen: Gewinn nach 5 % Gebuehr |
 | `items` | beide Quellen zusammengefuehrt: Blizzard gilt zuerst, ForeverDB fuellt auf - auch den Haendlerpreis |
 | `latest` | der juengste Stand mit Namen und Haendlerpreisen |
 | `history` | `snapshots` mit Namen und den Verkaeufen seit dem Stand davor |
@@ -238,10 +241,21 @@ FROM sold_daily WHERE day = current_date ORDER BY value_sold DESC LIMIT 20;
 SELECT name, n_listings, money(min_price) AS angebot, money(vendor_sell) AS haendler
 FROM latest WHERE vendor_sell > min_price ORDER BY vendor_sell - min_price DESC;
 
+-- Rezepte, die im Auktionshaus mehr bringen, als sie beim Haendler kosten
+SELECT name, item_subclass AS beruf, money(vendor_price) AS haendler, money(ah_price) AS ah,
+       money(profit) AS gewinn, n_listings, limited, vendor, zone
+FROM vendor_flips WHERE item_class = 'Recipe' ORDER BY profit DESC;
+
 -- In die vollstaendige Antwort greifen
 SELECT name, raw->>'$.preview_item.armor.value' AS armor
 FROM blizzard_items WHERE inventory_type = 'CHEST' AND quality = 'RARE';
 ```
+
+`vendor_flips` nimmt je Item den guenstigsten Haendler, den die Horde erreicht (Haendler der
+Allianz bleiben aussen vor), und vergleicht mit dem guenstigsten Angebot im Auktionshaus.
+Drei Dinge sagt die Sicht nicht: ob der Haendler einen Ruf verlangt (`reputation` nennt nur
+die Fraktion), wie schnell ein begrenzter Bestand nachkommt, und ob sich das Item zu dem
+Preis auch verkauft - dafuer steht `sold_recently` daneben.
 
 Die Datei laesst sich auch mit DBeaver, der DuckDB-Kommandozeile oder einer
 DuckDB-Erweiterung fuer VS Code oeffnen. DuckDB erlaubt dabei nur ein Programm, das schreibt:

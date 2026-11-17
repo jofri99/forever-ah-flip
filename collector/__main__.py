@@ -47,6 +47,11 @@ def build_parser() -> argparse.ArgumentParser:
     )
     details.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
 
+    vendors = sub.add_parser(
+        "foreverdb-vendors", help="zieht alle Haendler samt Sortiment und Preisen von ForeverDB ab"
+    )
+    vendors.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
+
     sub.add_parser("db", help="baut die lokale DuckDB-Datei mit Sichten auf alle Daten")
 
     sql = sub.add_parser("sql", help="fuehrt eine Abfrage gegen die lokale Datenbank aus")
@@ -96,6 +101,16 @@ def main(argv: list[str] | None = None) -> int:
                 config, args.lists, max_requests=args.max_requests, restart=args.restart
             )
         except ForeverDBError as exc:
+            print(exc, file=sys.stderr)
+            return 2
+
+    if args.command == "foreverdb-vendors":
+        from . import foreverdb_dump
+        from .foreverdb import ForeverDBError
+
+        try:
+            return foreverdb_dump.vendors_main(config, max_requests=args.max_requests)
+        except (ForeverDBError, RuntimeError) as exc:
             print(exc, file=sys.stderr)
             return 2
 

@@ -134,12 +134,20 @@ def dump_list(
 
 DETAILS_FILE = "item_details.jsonl"
 DETAILS_MISSING = "item_details_missing"      # Schluessel in state.json
+VENDOR_DETAILS_FILE = "vendor_details.jsonl"
+
+# Was sich einzeln abziehen laesst: Pfad der API, Zieldatei, Schluessel der Fehlanzeigen.
+DETAIL_KINDS: dict[str, tuple[str, str, str]] = {
+    "items": ("/items/{id}", DETAILS_FILE, DETAILS_MISSING),
+    "vendors": ("/vendors/{id}", VENDOR_DETAILS_FILE, "vendor_details_missing"),
+}
 
 
-def details_done(directory: Path) -> set[int]:
-    """Welche Items schon abgezogen sind oder die es bei ForeverDB nicht gibt."""
-    done: set[int] = set(_load_state(directory).get(DETAILS_MISSING) or [])
-    target = directory / DETAILS_FILE
+def details_done(directory: Path, kind: str = "items") -> set[int]:
+    """Was schon abgezogen ist oder was es bei ForeverDB nicht gibt."""
+    _, file_name, missing_key = DETAIL_KINDS[kind]
+    done: set[int] = set(_load_state(directory).get(missing_key) or [])
+    target = directory / file_name
     if target.is_file():
         with open(target, encoding="utf-8") as handle:
             for line in handle:
@@ -155,6 +163,7 @@ def dump_item_details(
     item_ids: list[int],
     directory: Path,
     max_requests: int | None = None,
+    kind: str = "items",
 ) -> dict[str, Any]:
     """Holt die Details einzeln - die API gibt sie nicht im Stapel her.
 
@@ -162,13 +171,14 @@ def dump_item_details(
     das eine, das gerade unterwegs war; der naechste Lauf ueberspringt alles,
     was schon da ist.
     """
+    path_template, file_name, missing_key = DETAIL_KINDS[kind]
     directory.mkdir(parents=True, exist_ok=True)
-    target = directory / DETAILS_FILE
-    done = details_done(directory)
+    target = directory / file_name
+    done = details_done(directory, kind)
     todo = [item_id for item_id in item_ids if item_id not in done]
 
     state = _load_state(directory)
-    missing: list[int] = list(state.get(DETAILS_MISSING) or [])
+    missing: list[int] = list(state.get(missing_key) or [])
     fetched = not_found = requests_made = 0
     stopped: str | None = None
 
@@ -178,7 +188,7 @@ def dump_item_details(
                 stopped = "Grenze fuer diesen Lauf erreicht"
                 break
             try:
-                response = client.get(f"/items/{item_id}")
+                response = client.get(path_template.format(id=item_id))
             except ForeverDBQuotaError as exc:
                 stopped = str(exc)
                 break
@@ -187,7 +197,7 @@ def dump_item_details(
             if response.status == 404:
                 # Festhalten, sonst fragt jeder Lauf erneut nach demselben Item.
                 missing.append(item_id)
-                state[DETAILS_MISSING] = missing
+                state[missing_key] = missing
                 _save_state(directory, state)
                 not_found += 1
                 continue
@@ -283,6 +293,47 @@ def details_main(settings: Settings, scope: str = "gaps", max_requests: int | No
     if result["stopped"]:
         print(f"  unterbrochen: {result['stopped']} - der naechste Lauf macht dort weiter")
     print(f"  {result['requests']} Anfragen, nach {result['file']}")
+    return 0
+
+
+def vendor_ids(settings: Settings) -> list[int]:
+    """Alle Haendler aus der abgezogenen Liste. Die der Allianz zuletzt: gesammelt wird
+    das Auktionshaus der Horde, erreichbar sind also zuerst die uebrigen."""
+    listed = dump_dir(settings) / "vendors.jsonl"
+    if not listed.is_file() or listed.stat().st_size == 0:
+        return []
+    con = store.connect()
+    try:
+        rows = con.execute(
+            f"SELECT id FROM read_json('{store.sql_path(listed)}', format = 'newline_delimited', "
+            "columns = {'id': 'INTEGER', 'side': 'VARCHAR'}) "
+            "ORDER BY (side = 'Alliance'), id"
+        ).fetchall()
+        return [row[0] for row in rows]
+    finally:
+        con.close()
+
+
+def vendors_main(settings: Settings, max_requests: int | None = None) -> int:
+    """Erst die Liste der Haendler, dann je Haendler das Sortiment mit Preisen."""
+    directory = dump_dir(settings)
+    with ForeverDBClient(settings.foreverdb_key) as client:
+        listing = dump_list(client, "vendors", directory, max_requests=max_requests)
+        print(f"Liste: {listing['rows']} von {listing['total']} Haendlern")
+        if not listing["done"]:
+            print(f"  unterbrochen: {listing['stopped']}")
+            return 0
+        budget = None if max_requests is None else max(max_requests - listing["requests"], 0)
+        result = dump_item_details(
+            client, vendor_ids(settings), directory, max_requests=budget, kind="vendors"
+        )
+    print(
+        f"Sortimente: {result['wanted']} gewuenscht, {result['already']} schon da, "
+        f"{result['fetched']} geholt, {result['left']} offen"
+    )
+    if result["stopped"]:
+        print(f"  unterbrochen: {result['stopped']} - der naechste Lauf macht dort weiter")
+    print(f"  nach {result['file']}")
     return 0
 
 

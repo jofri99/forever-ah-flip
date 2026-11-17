@@ -73,6 +73,14 @@ EMPTY["foreverdb_item_details"] = ", ".join(
     f'"{name}" {kind}' for name, kind in FOREVERDB_DETAIL_FIELDS.items()
 )
 
+# Ein Haendler mit seinem Sortiment, wie /vendors/{id} ihn liefert.
+EMPTY["foreverdb_vendor_details"] = (
+    "id INTEGER, name VARCHAR, title VARCHAR, side VARCHAR, zone VARCHAR, x DOUBLE, y DOUBLE, "
+    "seenInForever BOOLEAN, reputationFaction STRUCT(id INTEGER, name VARCHAR), "
+    "sells STRUCT(itemId INTEGER, name VARCHAR, price BIGINT, stack INTEGER, pricePerItem DOUBLE, "
+    "limited BOOLEAN, limitedStockCount INTEGER, classicData BOOLEAN, seenInForever BOOLEAN)[]"
+)
+
 
 def _padded(con: duckdb.DuckDBPyConnection, source: str, required: dict[str, str]) -> str:
     """Ergaenzt fehlende Spalten als NULL.
@@ -166,7 +174,42 @@ def _foreverdb_views(con: duckdb.DuckDBPyConnection, settings: Settings) -> list
         created.append("foreverdb_item_details")
     else:
         _empty_view(con, "foreverdb_item_details", EMPTY["foreverdb_item_details"])
+
+    # Die Haendler mit Sortiment. Feste Spalten, damit die Sicht vendor_items auch dann
+    # traegt, wenn ein Feld in den bisher abgezogenen Zeilen noch nie vorkam.
+    vendors = directory / foreverdb_dump.VENDOR_DETAILS_FILE
+    if vendors.is_file() and vendors.stat().st_size > 0:
+        columns = "{" + ", ".join(
+            f"'{part.split(' ', 1)[0]}': '{part.split(' ', 1)[1]}'"
+            for part in _split_columns(EMPTY["foreverdb_vendor_details"])
+        ) + "}"
+        con.execute(
+            f"CREATE OR REPLACE VIEW foreverdb_vendor_details AS SELECT * FROM read_json("
+            f"'{store.sql_path(vendors)}', format = 'newline_delimited', columns = {columns}, "
+            "ignore_errors = true) WHERE id IS NOT NULL"
+        )
+        created.append("foreverdb_vendor_details")
+    else:
+        _empty_view(con, "foreverdb_vendor_details", EMPTY["foreverdb_vendor_details"])
     return created
+
+
+def _split_columns(definition: str) -> list[str]:
+    """Zerlegt "a INTEGER, b STRUCT(x INTEGER, y VARCHAR)" an den Kommas der obersten Ebene."""
+    parts, depth, current = [], 0, ""
+    for char in definition:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    if current.strip():
+        parts.append(current.strip())
+    return parts
 
 
 DERIVED = """
@@ -209,6 +252,26 @@ FROM blizzard_items b
 FULL OUTER JOIN foreverdb_items f ON f.id = b.item_id
 LEFT JOIN foreverdb_item_details d ON d.id = coalesce(b.item_id, f.id);
 
+-- Was welcher Haendler verkauft: eine Zeile je Haendler und Item.
+CREATE OR REPLACE VIEW vendor_items AS
+SELECT v.id            AS vendor_id,
+       v.name          AS vendor,
+       v.title,
+       v.side,
+       v.zone,
+       v.x, v.y,
+       v.reputationFaction.name AS reputation,
+       s.itemId        AS item_id,
+       s.name          AS item_name,
+       s.price,
+       s.stack,
+       s.pricePerItem  AS price_per_item,
+       s.limited,
+       s.limitedStockCount AS limited_stock,
+       s.classicData   AS classic_data,
+       s.seenInForever AS seen_in_forever
+FROM foreverdb_vendor_details v, unnest(v.sells) AS t(s);
+
 -- Der juengste Stand, mit Namen und Haendlerpreisen.
 CREATE OR REPLACE VIEW latest AS
 SELECT s.snapshot_ts, s.house, s.item_id, i.name, i.quality, s.kind,
@@ -240,6 +303,36 @@ SELECT v.snapshot_ts::DATE AS day, v.house, v.item_id, i.name, v.kind,
 FROM sales v
 LEFT JOIN items i ON i.item_id = v.item_id
 GROUP BY ALL;
+
+-- Beim Haendler kaufen, im Auktionshaus verkaufen: je Item der guenstigste Haendler,
+-- den die Horde erreicht, gegen das guenstigste Angebot im Auktionshaus.
+-- `profit` rechnet die 5 % Gebuehr des Auktionshauses schon ab.
+CREATE OR REPLACE VIEW vendor_flips AS
+WITH cheapest AS (
+    SELECT * FROM vendor_items
+    WHERE side <> 'Alliance' AND price_per_item > 0
+    QUALIFY row_number() OVER (PARTITION BY item_id ORDER BY price_per_item, vendor_id) = 1
+),
+sold AS (
+    SELECT item_id, sum(qty_sold) AS qty_sold, sum(hours_covered) AS hours
+    FROM sold_daily WHERE day >= current_date - 1 GROUP BY item_id
+)
+SELECT l.item_id, l.name, i.item_class, i.item_subclass,
+       c.price_per_item                                  AS vendor_price,
+       l.min_price                                       AS ah_price,
+       round(l.min_price * 0.95 - c.price_per_item)::BIGINT AS profit,
+       round((l.min_price * 0.95 - c.price_per_item) * 100.0 / c.price_per_item)::INTEGER
+                                                         AS profit_pct,
+       l.n_listings,
+       s.qty_sold                                        AS sold_recently,
+       c.limited, c.limited_stock,
+       c.vendor, c.zone, c.side, c.reputation,
+       c.seen_in_forever
+FROM latest l
+JOIN cheapest c USING (item_id)
+JOIN items i USING (item_id)
+LEFT JOIN sold s USING (item_id)
+WHERE l.min_price * 0.95 > c.price_per_item;
 """
 
 
@@ -263,6 +356,7 @@ def build(settings: Settings) -> dict[str, Any]:
             present[view] = True
         present.setdefault("foreverdb_items", False)
         present.setdefault("foreverdb_item_details", False)
+        present.setdefault("foreverdb_vendor_details", False)
         con.execute(DERIVED)
 
         views = [

@@ -269,3 +269,41 @@ def test_a_torn_last_line_does_not_break_the_resume(tmp_path: Path) -> None:
     (tmp_path / foreverdb_dump.DETAILS_FILE).write_text('{"id":1,"name":"Item 1"}\n{"id":2,"na', encoding="utf-8")
 
     assert foreverdb_dump.details_done(tmp_path) == {1}
+
+
+class FakeVendors(FakeCatalog):
+    """Drei Haendler in der Liste; die Details nennen das Sortiment."""
+
+    SIDES = {1: "Alliance", 2: "Horde", 3: "Neutral"}
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append({"url": url, "params": dict(params or {})})
+        if url.endswith("/vendors"):
+            rows = [{"id": i, "name": f"Vendor {i}", "side": side} for i, side in self.SIDES.items()]
+            return FakeResponse(200, {"data": rows, "meta": {"total": 3}})
+        vendor_id = int(url.rsplit("/", 1)[1])
+        return FakeResponse(200, {"data": {"id": vendor_id, "name": f"Vendor {vendor_id}", "sells": [{"itemId": 2589, "pricePerItem": 20.0}]}})
+
+
+def test_vendors_are_listed_then_fetched_with_the_alliance_last(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
+    settings = Settings.from_env(
+        {"BLIZZARD_CLIENT_ID": "x", "BLIZZARD_CLIENT_SECRET": "x", "AH_DATA_DIR": str(tmp_path / "data")}
+    )
+    session = FakeVendors()
+    client = make_client(session)
+    directory = foreverdb_dump.dump_dir(settings)
+
+    foreverdb_dump.dump_list(client, "vendors", directory)
+    # Gesammelt wird das Auktionshaus der Horde: deren Haendler und die neutralen zuerst.
+    assert foreverdb_dump.vendor_ids(settings) == [2, 3, 1]
+
+    session.calls.clear()
+    result = foreverdb_dump.dump_item_details(
+        client, foreverdb_dump.vendor_ids(settings), directory, kind="vendors"
+    )
+    assert [c["url"].rsplit("/", 2)[-2:] for c in session.calls] == [["vendors", "2"], ["vendors", "3"], ["vendors", "1"]]
+    assert result["fetched"] == 3
+    assert foreverdb_dump.details_done(directory, "vendors") == {1, 2, 3}
+    # Die Details der Haendler liegen getrennt von denen der Items.
+    assert foreverdb_dump.details_done(directory, "items") == set()
+    assert (directory / foreverdb_dump.VENDOR_DETAILS_FILE).is_file()

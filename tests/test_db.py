@@ -90,6 +90,7 @@ def test_build_creates_views_over_every_dataset(filled: Settings) -> None:
         "blizzard_items": 1,
         "foreverdb_item_details": 0,
         "foreverdb_items": 2,
+        "foreverdb_vendor_details": 0,
         "history": 4,
         "items": 2,
         "latest": 2,
@@ -97,6 +98,8 @@ def test_build_creates_views_over_every_dataset(filled: Settings) -> None:
         "sales": 1,
         "snapshots": 4,
         "sold_daily": 1,
+        "vendor_flips": 0,
+        "vendor_items": 0,
     }
     assert result["present"]["runs"] is False
 
@@ -205,3 +208,43 @@ def test_details_from_foreverdb_fill_the_vendor_price(filled: Settings) -> None:
     assert rows(filled, "SELECT vendor_sell FROM latest WHERE item_id = 647") == [(51234,)]
     # Auch die verschachtelten Felder sind da.
     assert rows(filled, "SELECT stats[1].name FROM foreverdb_item_details") == [("Strength",)]
+
+
+def test_vendor_flips_compare_the_cheapest_reachable_vendor_with_the_auction_house(filled: Settings) -> None:
+    directory = foreverdb_dump.dump_dir(filled)
+    # Drei Haendler fuehren den Stoff (Item 2589, im Auktionshaus fuer 24c):
+    # einer der Horde fuer 20c, ein neutraler fuer 10c, einer der Allianz fuer 1c.
+    (directory / foreverdb_dump.VENDOR_DETAILS_FILE).write_text(
+        '{"id":1,"name":"Horde Cloth","title":"Trade Supplies","side":"Horde","zone":"Orgrimmar","x":1.0,"y":2.0,'
+        '"reputationFaction":{"id":76,"name":"Orgrimmar"},"sells":['
+        '{"itemId":2589,"name":"Linen Cloth","price":20,"stack":1,"pricePerItem":20.0,"limited":false,"limitedStockCount":null,"seenInForever":true},'
+        '{"itemId":647,"name":"Destiny","price":999999,"stack":1,"pricePerItem":999999.0,"limited":true,"limitedStockCount":1,"seenInForever":true}]}\n'
+        '{"id":2,"name":"Neutral Goods","title":"Merchant","side":"Neutral","zone":"Booty Bay","x":3.0,"y":4.0,'
+        '"sells":[{"itemId":2589,"name":"Linen Cloth","price":50,"stack":5,"pricePerItem":10.0,"limited":true,"limitedStockCount":2,"seenInForever":false}]}\n'
+        '{"id":3,"name":"Alliance Cloth","title":"Trade Supplies","side":"Alliance","zone":"Stormwind","x":5.0,"y":6.0,'
+        '"sells":[{"itemId":2589,"name":"Linen Cloth","price":1,"stack":1,"pricePerItem":1.0,"limited":false,"limitedStockCount":null,"seenInForever":true}]}\n',
+        encoding="utf-8",
+    )
+    result = db.build(filled)
+    assert result["counts"]["foreverdb_vendor_details"] == 3
+    assert result["counts"]["vendor_items"] == 4
+
+    offers = rows(
+        filled,
+        "SELECT vendor, side, item_id, price_per_item, limited, limited_stock, reputation "
+        "FROM vendor_items WHERE item_id = 2589 ORDER BY price_per_item",
+    )
+    assert offers == [
+        ("Alliance Cloth", "Alliance", 2589, 1.0, False, None, None),
+        ("Neutral Goods", "Neutral", 2589, 10.0, True, 2, None),
+        ("Horde Cloth", "Horde", 2589, 20.0, False, None, "Orgrimmar"),
+    ]
+
+    flips = rows(
+        filled,
+        "SELECT name, vendor_price, ah_price, profit, profit_pct, vendor, side, limited, limited_stock FROM vendor_flips",
+    )
+    # Der Haendler der Allianz waere am billigsten, ist fuer die Horde aber nicht erreichbar.
+    # Es zaehlt der neutrale: 24c * 0,95 - 10c = 12,8c Gewinn je Stueck. Das Schwert kostet
+    # beim Haendler mehr als im Auktionshaus und taucht nicht auf.
+    assert flips == [("Linen Cloth", 10.0, 24, 13, 128, "Neutral Goods", "Neutral", True, 2)]
