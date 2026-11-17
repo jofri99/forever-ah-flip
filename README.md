@@ -13,8 +13,9 @@ Drei Datenquellen:
 
 | Teil | Was es macht |
 |---|---|
-| `collector/` | Python-Paket, das die Battle.net-API abfragt. Bisher nur `verify`. |
-| `viewer/index.html` | Einzelne HTML-Datei. Liest TSM-Daten und eigene Dumps, zeigt Tabellen und Deal-Listen. |
+| `collector/` | Python-Paket: sammelt ueber die Battle.net-API und baut die Dateien fuer die Anzeige. |
+| `web/` | Die Oberflaeche: React, TypeScript, Vite, shadcn/ui. Markttabelle und Preisverlauf. |
+| `viewer/index.html` | Aelterer Einzeldatei-Viewer fuer TSM-Daten und eigene Dumps, ohne Verlauf. |
 | `addon/AHDump` | In-Game-Addon. `/ahdump` macht einen Full-Scan des Auktionshauses. |
 | `tools/Convert-AHDump.ps1` | Optional: macht aus `AHDump.lua` eine CSV fuer Excel, Pandas & Co. |
 
@@ -119,7 +120,7 @@ ueber 14 Tage laege in 336 Dateien. `publish` baut daraus eine Form, die ein Bro
 wenigen Teilabrufen lesen kann:
 
 ```powershell
-python -m collector publish            # 14 Tage nach site/data
+python -m collector publish            # 14 Tage nach web/public/data
 python -m collector publish --days 30
 ```
 
@@ -137,38 +138,52 @@ Parquet-Leser das ohne Zusatzpaket verstehen.
 `sales_hours_24h` in `market.parquet` sagt, wie viele der letzten 24 Stunden durch
 Vergleiche gedeckt sind. Steht dort 6, sind die Verkaufszahlen ein Viertel der Wahrheit.
 
-Die Dateien sind abgeleitet und jederzeit neu baubar, `site/data/` steht deshalb in
+Die Dateien sind abgeleitet und jederzeit neu baubar, `web/public/data/` steht deshalb in
 `.gitignore`.
 
-### Die Seite
+### Die Oberflaeche
 
-`site/index.html` zeigt den Markt als Tabelle und den Preisverlauf eines Items als
-Diagramm. Lokal ansehen:
+`web/` ist eine React-App: TypeScript, Vite, Tailwind und shadcn/ui. Sie zeigt den Markt
+als Tabelle und den Preisverlauf eines Items als Diagramm. Gebraucht wird Node.js.
 
 ```powershell
 git -C data/warehouse pull          # frische Daten holen
 python -m collector publish         # Dateien fuer die Anzeige bauen
-python tools/serve.py               # http://127.0.0.1:8777
+cd web
+npm install                         # einmalig
+npm run dev                         # http://localhost:5173
 ```
-
-`tools/serve.py` statt `python -m http.server`, weil der Server aus der Standardbibliothek
-keine Teilabrufe kann - und ohne die muesste die Seite fuer jedes Diagramm die ganze
-`hourly.parquet` laden.
 
 - Die Tabelle laesst sich nach jeder Spalte sortieren, nach Name oder ID durchsuchen und
   auf Einzelstuecke oder Stapelware einschraenken. Fehlende Werte stehen immer am Ende.
-- Ein Klick auf eine Zeile oeffnet den Verlauf: guenstigster Preis, Median und darunter die
-  verkaufte Menge je Stand - oder die Zahl der Angebote, solange es keine Verkaufsdaten gibt.
-- Die Adresse merkt sich das Item (`#12359:commodity`), ein Verlauf laesst sich also verlinken.
-- Zeiten stehen in Ortszeit, hell und dunkel folgen dem System.
+  Von den gut 6.000 Zeilen stehen nur die sichtbaren im Dokument.
+- Ein Klick oder Enter auf einer Zeile oeffnet den Verlauf: guenstigster Preis, Median und
+  darunter die verkaufte Menge je Stand - oder die Zahl der Angebote, solange es keine
+  Verkaufsdaten gibt.
+- Die Adresse merkt sich das Item (`#12359:commodity`). Ein Verlauf laesst sich verlinken,
+  und die Zurueck-Taste schliesst ihn wieder.
+- Zeiten stehen in Ortszeit. Hell und dunkel folgen dem System, der Knopf oben rechts
+  oder die Taste `d` schaltet um.
 
-Zwei Bibliotheken kommen von jsDelivr, mit fester Version: `hyparquet` 1.33.0 liest die
-Parquet-Dateien (22 KB uebertragen), TradingViews `lightweight-charts` 5.2.1 zeichnet das
-Diagramm (63 KB). Letztere steht unter Apache-2.0 und verlangt die Namensnennung samt Link,
-die im Diagramm und in der Fusszeile steht.
+```
+web/src/
+  lib/data.ts        liest meta.json, market.parquet und gezielt aus hourly.parquet
+  lib/rows.ts        Filtern und Sortieren als reine Funktionen
+  lib/format.ts      Gold/Silber/Kupfer, Prozente, Ortszeit fuer das Diagramm
+  components/        Tabelle, Detailansicht, Diagramm; ui/ kommt von shadcn
+  hooks/             das gewaehlte Item in der Adresse
+```
 
-Item-Namen fehlen noch: die API liefert nur IDs. Liegt eine `site/data/names.json` der Form
-`{"2589": "Leinenstoff"}` vor, zeigt die Seite Namen statt `Item 2589`.
+Das Diagramm zeichnet TradingViews `lightweight-charts`, die Parquet-Dateien liest
+`hyparquet`. Die Diagramm-Bibliothek wird erst geladen, wenn jemand ein Item oeffnet. Sie
+steht unter Apache-2.0 und verlangt die Namensnennung samt Link, die im Diagramm und in
+der Fusszeile steht.
+
+Der Entwicklungsserver von Vite beantwortet Teilabrufe - ohne die muesste die Seite fuer
+jedes Diagramm die ganze `hourly.parquet` laden. `python -m http.server` kann das nicht.
+
+Item-Namen fehlen noch: die API liefert nur IDs. Liegt eine `web/public/data/names.json`
+der Form `{"2589": "Leinenstoff"}` vor, zeigt die Seite Namen statt `Item 2589`.
 
 ### Wie Verkaeufe entstehen
 
@@ -375,7 +390,7 @@ collector/
   __main__.py   py -m collector <kommando>
 tests/          gefaelschte Session und gefaelschter Client, echtes DuckDB, kein Netz
 .github/workflows/
-  tests.yml     pytest bei jedem Push
+  tests.yml     pytest sowie Lint, Tests und Build der Oberflaeche bei jedem Push
   collect.yml   der Sammler, dreimal je Stunde
 ```
 

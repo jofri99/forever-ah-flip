@@ -18,4 +18,7 @@ __pycache__/
 .env
 
 # Abgeleitete Dateien fuer die Anzeige, jederzeit neu baubar
-site/data/
+web/public/data/
+
+# Lokale Einstellungen von Claude Code
+.claude/

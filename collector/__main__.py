@@ -31,7 +31,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     publish = sub.add_parser("publish", help="baut aus dem Warehouse die Dateien fuer die Anzeige")
     publish.add_argument("--days", type=int, default=14, help="Zeitfenster in Tagen (Vorgabe 14)")
-    publish.add_argument("--out", type=Path, default=None, help="Zielordner (Vorgabe site/data)")
+    publish.add_argument("--out", type=Path, default=None, help="Zielordner (Vorgabe web/public/data)")
     publish.add_argument("--house", type=int, default=None, help="Auktionshaus (Vorgabe 114)")
 
     return parser

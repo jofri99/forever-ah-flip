@@ -31,7 +31,7 @@ MARKET = "market.parquet"
 META = "meta.json"
 NAMES = "names.json"      # optional: {"2589": "Leinenstoff", ...}
 
-DEFAULT_OUT = ROOT / "site" / "data"
+DEFAULT_OUT = ROOT / "web" / "public" / "data"
 DEFAULT_DAYS = 14
 
 # Klein genug, dass ein Item nur einen Bruchteil der Datei kostet, gross genug,
