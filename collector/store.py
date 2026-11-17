@@ -1,12 +1,22 @@
-"""Das Warehouse: Parquet-Dateien, eine je Tag und Datensatz.
+"""Das Warehouse: Parquet-Dateien, eine je Stand und Datensatz.
 
 Bewusst keine Datenbankdatei. Parquet laesst sich versionieren, im Browser mit
 DuckDB-WASM lesen und von jedem Werkzeug oeffnen, das SQL kann.
+
+Jede Datei wird genau einmal geschrieben und danach nie wieder angefasst:
+
+    items/house=114/dt=2026-11-14/191911.parquet
+
+Das ist Absicht. Das Warehouse liegt in einem Git-Branch, und eine Tagesdatei,
+die bei jedem Stand neu geschrieben wird, legt jedes Mal ihren ganzen Inhalt
+in die Historie - rund 30 MB am Tag fuer 2,4 MB Daten.
 """
 
 from __future__ import annotations
 
 import datetime as dt
+import os
+from email.utils import format_datetime
 from pathlib import Path
 
 import duckdb
@@ -14,7 +24,6 @@ import duckdb
 ITEMS = "items"
 SALES = "sales"
 RUNS = "runs"
-SNAPSHOT = "state/snapshot"
 
 
 def connect() -> duckdb.DuckDBPyConnection:
@@ -22,19 +31,38 @@ def connect() -> duckdb.DuckDBPyConnection:
     return duckdb.connect()
 
 
-def dataset_path(root: Path, dataset: str, day: dt.date | None = None) -> Path:
-    if day is None:
-        return root / f"{dataset}.parquet"
-    return root / dataset / f"dt={day:%Y-%m-%d}.parquet"
-
-
 def sql_path(path: Path) -> str:
     """DuckDB mag Schraegstriche, auch unter Windows."""
     return path.as_posix().replace("'", "''")
 
 
+def snapshot_path(root: Path, dataset: str, house: int, ts: dt.datetime) -> Path:
+    return root / dataset / f"house={house}" / f"dt={ts:%Y-%m-%d}" / f"{ts:%H%M%S}.parquet"
+
+
+def latest_snapshot(root: Path, house: int, dataset: str = ITEMS) -> dt.datetime | None:
+    """Der juengste Stand, der schon im Warehouse liegt - abgelesen am Dateinamen."""
+    base = root / dataset / f"house={house}"
+    if not base.is_dir():
+        return None
+    newest: dt.datetime | None = None
+    for file in base.glob("dt=*/*.parquet"):
+        try:
+            stamp = dt.datetime.strptime(file.parent.name[3:] + file.stem, "%Y-%m-%d%H%M%S")
+        except ValueError:
+            continue
+        if newest is None or stamp > newest:
+            newest = stamp
+    return newest
+
+
+def http_date(ts: dt.datetime) -> str:
+    """UTC-Zeitpunkt als HTTP-Datum, wie es If-Modified-Since erwartet."""
+    return format_datetime(ts.replace(tzinfo=dt.timezone.utc), usegmt=True)
+
+
 def read_parquet(con: duckdb.DuckDBPyConnection, path: Path, into: str) -> int:
-    """Liest eine Parquet-Datei in eine temporaere Tabelle. Fehlt sie, bleibt die Tabelle leer."""
+    """Liest eine Parquet-Datei in eine temporaere Tabelle. Fehlt sie, kommt 0 zurueck."""
     if not path.exists():
         return 0
     con.execute(f"CREATE OR REPLACE TEMP TABLE {into} AS SELECT * FROM read_parquet('{sql_path(path)}')")
@@ -42,56 +70,13 @@ def read_parquet(con: duckdb.DuckDBPyConnection, path: Path, into: str) -> int:
 
 
 def write_parquet(con: duckdb.DuckDBPyConnection, relation: str, path: Path, order_by: str = "") -> int:
+    """Schreibt erst daneben und benennt dann um, damit nie eine halbe Datei liegen bleibt."""
     path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_name(path.name + ".tmp")
     order = f" ORDER BY {order_by}" if order_by else ""
     con.execute(
-        f"COPY (SELECT * FROM {relation}{order}) TO '{sql_path(path)}' "
+        f"COPY (SELECT * FROM {relation}{order}) TO '{sql_path(temporary)}' "
         "(FORMAT parquet, COMPRESSION zstd)"
     )
+    os.replace(temporary, path)
     return con.execute(f"SELECT count(*) FROM {relation}").fetchone()[0]
-
-
-def append_parquet(
-    con: duckdb.DuckDBPyConnection, relation: str, path: Path, order_by: str = ""
-) -> int:
-    """Haengt an eine Tagesdatei an, indem sie gelesen und neu geschrieben wird.
-
-    Parquet kann nicht anhaengen. Bei einer Tagesdatei von ein paar MB ist das
-    Neuschreiben billiger als eine Datei je Abruf und tausende kleiner Dateien.
-    """
-    path.parent.mkdir(parents=True, exist_ok=True)
-    if path.exists():
-        con.execute(
-            f"CREATE OR REPLACE TEMP TABLE _merge AS "
-            f"SELECT * FROM read_parquet('{sql_path(path)}') "
-            f"UNION ALL BY NAME SELECT * FROM {relation}"
-        )
-    else:
-        con.execute(f"CREATE OR REPLACE TEMP TABLE _merge AS SELECT * FROM {relation}")
-
-    rows = write_parquet(con, "_merge", path, order_by)
-    con.execute("DROP TABLE _merge")
-    return rows
-
-
-def last_seen_modified(con: duckdb.DuckDBPyConnection, runs_path: Path) -> str | None:
-    """Der zuletzt verarbeitete Last-Modified-Wert, fuer bedingte Anfragen."""
-    if not runs_path.exists():
-        return None
-    row = con.execute(
-        f"SELECT last_modified FROM read_parquet('{sql_path(runs_path)}') "
-        "WHERE NOT skipped AND last_modified IS NOT NULL "
-        "ORDER BY snapshot_ts DESC LIMIT 1"
-    ).fetchone()
-    return row[0] if row else None
-
-
-def known_snapshots(con: duckdb.DuckDBPyConnection, runs_path: Path) -> set[dt.datetime]:
-    """Welche Staende schon verarbeitet sind - damit derselbe nicht zweimal zaehlt."""
-    if not runs_path.exists():
-        return set()
-    rows = con.execute(
-        f"SELECT DISTINCT snapshot_ts FROM read_parquet('{sql_path(runs_path)}') "
-        "WHERE snapshot_ts IS NOT NULL AND NOT skipped"
-    ).fetchall()
-    return {row[0] for row in rows}

@@ -9,10 +9,53 @@ from pathlib import Path
 import pytest
 
 from collector import store
-from collector.collect import aggregate_items, diff_sales, load_snapshot
+from collector.blizzard import ApiResponse
+from collector.collect import aggregate_items, diff_sales, load_snapshot, run, summary
+from collector.config import Settings
 
 T0 = dt.datetime(2026, 11, 14, 10, 0, 0)
 T1 = dt.datetime(2026, 11, 14, 11, 0, 0)
+
+
+class FakeClient:
+    """Spielt die API nach: liefert vorbereitete Staende und beantwortet
+    If-Modified-Since wie Blizzard mit 304."""
+
+    def __init__(self) -> None:
+        self.stamp: dt.datetime | None = None
+        self.auction_payload: dict = {}
+        self.commodity_payload: dict = {}
+        self.seen_if_modified_since: list[str | None] = []
+        self.downloads = 0
+
+    def serve(self, stamp: dt.datetime, auctions: dict, commodities: dict) -> None:
+        self.stamp, self.auction_payload, self.commodity_payload = stamp, auctions, commodities
+
+    def _respond(self, payload: dict, stream_to: Path | None) -> ApiResponse:
+        raw = json.dumps(payload).encode("utf-8")
+        if stream_to is not None:
+            stream_to.parent.mkdir(parents=True, exist_ok=True)
+            stream_to.write_bytes(raw)
+        self.downloads += 1
+        return ApiResponse(
+            status=200,
+            url="fake",
+            headers={"last-modified": store.http_date(self.stamp)},
+            size=len(raw),
+            path=stream_to,
+        )
+
+    def auctions(self, ruleset, house, stream_to=None, if_modified_since=None) -> ApiResponse:
+        self.seen_if_modified_since.append(if_modified_since)
+        if if_modified_since == store.http_date(self.stamp):
+            return ApiResponse(status=304, url="fake")
+        return self._respond(self.auction_payload, stream_to)
+
+    def commodities(self, ruleset, house, stream_to=None, if_modified_since=None) -> ApiResponse:
+        return self._respond(self.commodity_payload, stream_to)
+
+    def close(self) -> None:
+        pass
 
 SNAPSHOT_A = {
     "id": 114,
@@ -140,18 +183,108 @@ def test_long_counts_as_sold_only_within_two_hours(con, tmp_path: Path) -> None:
     assert row == (0, 1)
 
 
-def test_append_parquet_grows_the_day_file(con, tmp_path: Path) -> None:
-    load_snapshot(con, write(tmp_path / "a.json", SNAPSHOT_A), None)
-    aggregate_items(con, T0, 114)
-    path = store.dataset_path(tmp_path / "warehouse", store.ITEMS, T0.date())
+def test_snapshot_path_and_latest_snapshot(tmp_path: Path) -> None:
+    assert store.latest_snapshot(tmp_path, 114) is None
 
-    assert store.append_parquet(con, "items", path, "item_id") == 2
+    first = store.snapshot_path(tmp_path, store.ITEMS, 114, T0)
+    assert first.relative_to(tmp_path).as_posix() == "items/house=114/dt=2026-11-14/100000.parquet"
 
-    aggregate_items(con, T1, 114)
-    assert store.append_parquet(con, "items", path, "item_id") == 4
-    assert path.name == "dt=2026-11-14.parquet"
+    for stamp in (T0, T1, dt.datetime(2026, 11, 13, 23, 19, 11)):
+        path = store.snapshot_path(tmp_path, store.ITEMS, 114, stamp)
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_bytes(b"")
+    # Ein anderes Haus darf nicht mitzaehlen.
+    other = store.snapshot_path(tmp_path, store.ITEMS, 113, dt.datetime(2026, 12, 1, 0, 0, 0))
+    other.parent.mkdir(parents=True, exist_ok=True)
+    other.write_bytes(b"")
 
-    stamps = con.execute(
-        f"SELECT count(DISTINCT snapshot_ts) FROM read_parquet('{store.sql_path(path)}')"
-    ).fetchone()[0]
-    assert stamps == 2
+    assert store.latest_snapshot(tmp_path, 114) == T1
+
+
+def test_http_date_matches_what_the_api_sends() -> None:
+    assert store.http_date(dt.datetime(2026, 11, 14, 19, 19, 11)) == "Sat, 14 Nov 2026 19:19:11 GMT"
+
+
+@pytest.fixture
+def settings(tmp_path: Path) -> Settings:
+    return Settings.from_env(
+        {
+            "BLIZZARD_CLIENT_ID": "id",
+            "BLIZZARD_CLIENT_SECRET": "secret",
+            "AH_DATA_DIR": str(tmp_path / "data"),
+        }
+    )
+
+
+def test_run_end_to_end_over_two_snapshots(settings: Settings) -> None:
+    client = FakeClient()
+    warehouse = settings.warehouse_dir
+    state = settings.state_dir / "house114.parquet"
+
+    # Erster Stand: nichts zum Vergleichen, also keine Verkaeufe.
+    client.serve(T0, SNAPSHOT_A, COMMODITIES_A)
+    first = run(settings, client=client)
+
+    assert not first["skipped"]
+    assert (first["auctions"], first["commodities"], first["items"]) == (3, 2, 3)
+    assert "previous_ts" not in first
+    assert store.snapshot_path(warehouse, store.ITEMS, 114, T0).exists()
+    assert not store.snapshot_path(warehouse, store.SALES, 114, T0).exists()
+    assert store.snapshot_path(warehouse, store.RUNS, 114, T0).exists()
+    assert state.exists()
+    assert client.seen_if_modified_since == [None]
+
+    # Zweiter Lauf ohne neue Daten: 304, kein Download, keine neue Datei.
+    downloads = client.downloads
+    again = run(settings, client=client)
+
+    assert again["skipped"] and again["reason"] == "unveraendert"
+    assert client.seen_if_modified_since[-1] == "Sat, 14 Nov 2026 10:00:00 GMT"
+    assert client.downloads == downloads
+    assert len(list(warehouse.rglob("*.parquet"))) == 2
+
+    # Neuer Stand eine Stunde spaeter: jetzt entstehen Verkaeufe.
+    client.serve(T1, SNAPSHOT_B, COMMODITIES_B)
+    second = run(settings, client=client)
+
+    assert not second["skipped"]
+    assert second["previous_ts"] == T0
+    assert second["gap_hours"] == 1.0
+    assert (second["sold"], second["expired"], second["unclear"], second["new"]) == (1, 1, 1, 1)
+    assert second["value_sold"] == 500
+    assert store.snapshot_path(warehouse, store.SALES, 114, T1).exists()
+    assert "1 verkauft" in summary(second)
+
+    # Der Vergleichsstand ist jetzt der neue.
+    con = store.connect()
+    try:
+        assert store.read_parquet(con, state, "prev") == 3
+        assert con.execute("SELECT max(snapshot_ts) FROM prev").fetchone()[0] == T1
+        # Das Warehouse laesst sich als Ganzes lesen, Haus und Tag kommen aus dem Pfad.
+        glob = store.sql_path(warehouse / "items" / "*" / "*" / "*.parquet")
+        stamps = con.execute(
+            f"SELECT count(DISTINCT snapshot_ts), count(*) FROM read_parquet('{glob}')"
+        ).fetchone()
+        assert stamps == (2, 6)
+    finally:
+        con.close()
+
+    # Nichts Rohes bleibt liegen.
+    assert not (settings.raw_dir / "current").exists()
+
+
+def test_run_skips_a_snapshot_that_is_already_stored(settings: Settings) -> None:
+    client = FakeClient()
+    client.serve(T0, SNAPSHOT_A, COMMODITIES_A)
+    run(settings, client=client)
+
+    # --force umgeht If-Modified-Since, der Stand ist aber derselbe.
+    forced = run(settings, client=client, force=True)
+    assert not forced["skipped"]
+
+    # Ohne force und ohne 304 - etwa wenn der Server den Header ignoriert.
+    client.auctions = lambda ruleset, house, stream_to=None, if_modified_since=None: client._respond(  # type: ignore[method-assign]
+        client.auction_payload, stream_to
+    )
+    repeated = run(settings, client=client)
+    assert repeated["skipped"] and repeated["reason"] == "schon verarbeitet"

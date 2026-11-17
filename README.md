@@ -43,29 +43,55 @@ und die Daten werden stuendlich um :19 neu gebaut.
 ### Gesammelt wird ein Haus
 
 **Haus 114, Auktionshaus der Horde im Ruleset Normal** - PvE Horde. Aenderbar ueber
-`FOREVER_HOUSE` in der `.env`.
+`FOREVER_HOUSE`.
+
+Ein Durchlauf holt Auktionen und Stapelware, verdichtet beides und schreibt je Stand eine
+Datei, die danach nie wieder angefasst wird (Zeiten in UTC):
+
+```
+data/warehouse/                                  = Branch `data`
+  items/house=114/dt=2026-11-17/081855.parquet   je Item eine Zeile: Angebote, Menge,
+                                                 guenstigster Preis, p25, Median, Gebote
+  sales/house=114/dt=2026-11-17/081855.parquet   je Item: verkauft, abgelaufen, unklar, neu
+  runs/house=114/dt=2026-11-17/081855.parquet    eine Zeile Protokoll
+data/state/house114.parquet                      rohe Momentaufnahme, nur bis zum naechsten Lauf
+```
+
+160.000 bis 270.000 Auktionen werden so zu gut 6.000 Zeilen und 100 KB je Stand, rund
+2,4 MB am Tag. Die rohen Einzelauktionen bleiben nicht liegen - sie werden nur gebraucht,
+um zwei aufeinanderfolgende Staende zu vergleichen.
+
+Eine Datei je Stand statt einer wachsenden Tagesdatei ist Absicht: das Warehouse liegt in
+Git, und eine Datei, die 24-mal am Tag neu geschrieben wird, legt 24-mal ihren Inhalt in die
+Historie.
+
+### Betrieb in GitHub Actions
+
+Der Workflow [`collect`](.github/workflows/collect.yml) laeuft dreimal je Stunde
+(`2,22,42 * * * *`). Blizzard baut die Daten stuendlich gegen :19 neu; der erste Versuch
+kommt kurz danach, die anderen fangen Verspaetungen des Schedulers ab. Gibt es nichts
+Neues, schickt der Sammler `If-Modified-Since`, bekommt `304` und schreibt nichts.
+
+| Was | Wo |
+|---|---|
+| Code | Branch `main` |
+| Daten | Branch `data`, ohne gemeinsame Historie mit `main`, ein Commit je Stand |
+| Vergleichsstand | Actions-Cache (`state-...`), weil er sich jedes Mal komplett aendert |
+| Zugangsdaten | Repository-Secrets `BLIZZARD_CLIENT_ID` und `BLIZZARD_CLIENT_SECRET` |
+
+Geht der Cache verloren, fehlen fuer genau einen Stand die Verkaeufe - Preise und Mengen
+sind davon nicht betroffen.
+
+Die Daten lokal haben:
 
 ```powershell
-python -m collector collect
+git fetch origin data
+git worktree add data/warehouse data      # einmalig
+git -C data/warehouse pull                # danach zum Aktualisieren
 ```
 
-Ein Durchlauf holt Auktionen und Stapelware, verdichtet beides und legt es ab:
-
-```
-data/warehouse/
-  items/dt=2026-11-14.parquet   je Stand und Item eine Zeile: Angebote, Menge,
-                                guenstigster Preis, p25, Median, Warenwert, Gebote
-  sales/dt=2026-11-14.parquet   je Stand und Item: verkauft, abgelaufen, unklar, neu
-  state/snapshot.parquet        die rohe Momentaufnahme, nur bis zum naechsten Lauf
-  runs.parquet                  Protokoll: wann, welcher Stand, wie viele Zeilen
-```
-
-266.000 Auktionen werden so zu 6.228 Zeilen und 99 KB je Stand, also rund 2,4 MB am Tag.
-Die rohen Einzelauktionen bleiben nicht liegen - sie werden nur gebraucht, um zwei
-aufeinanderfolgende Staende zu vergleichen.
-
-Laeuft der Sammler, obwohl es nichts Neues gibt, schickt er `If-Modified-Since` und bekommt
-`304` zurueck: kein Download, 1 Sekunde. Der Cron darf also ruhig alle zehn Minuten laufen.
+Lokal sammelt man dann besser nicht in dasselbe Verzeichnis, sonst kollidieren die Dateien
+beim naechsten `pull`. Fuer Experimente: `$env:AH_DATA_DIR = "data/dev"`.
 
 ### Wie Verkaeufe entstehen
 
@@ -252,7 +278,8 @@ Client-ID und Secret dort eintragen. `.env` steht in `.gitignore` und gehoert ni
 ```powershell
 python -m collector config     # zeigt, was geladen wurde, ohne Geheimnisse
 python -m collector verify     # fragt die Forever-Endpunkte ab
-python -m pytest               # 17 Tests, kein Netz noetig
+python -m collector collect    # ein Durchlauf, wie ihn Actions ausfuehrt
+python -m pytest               # kein Netz noetig
 ```
 
 `verify` arbeitet sich vom Token ueber den Ruleset-Index bis zu einer Stichprobe aus drei
@@ -266,17 +293,18 @@ collector/
   config.py     Einstellungen aus .env oder Umgebung, Namespaces, Pfade
   blizzard.py   OAuth-Token, Wiederholungen bei 429 und 5xx, Download in Dateien
   verify.py     prueft die Endpunkte und schreibt den Bericht
+  collect.py    ein Durchlauf: holen, verdichten, Verkaeufe ableiten
+  store.py      Pfade und Parquet-Dateien des Warehouse
   __main__.py   py -m collector <kommando>
-tests/          Tests gegen eine gefaelschte Session, ohne Netz
+tests/          gefaelschte Session und gefaelschter Client, echtes DuckDB, kein Netz
 .github/workflows/
   tests.yml     pytest bei jedem Push
-  collect.yml   verify von Hand; der stuendliche Cron ist auskommentiert,
-                bis die Secrets gesetzt sind
+  collect.yml   der Sammler, dreimal je Stunde
 ```
 
 In GitHub kommen die Zugangsdaten aus *Settings -> Secrets and variables -> Actions*, als
-`BLIZZARD_CLIENT_ID` und `BLIZZARD_CLIENT_SECRET`. Danach laesst sich `collect` unter *Actions*
-von Hand starten; erst wenn das durchlaeuft, wird der `schedule`-Block aktiviert.
+`BLIZZARD_CLIENT_ID` und `BLIZZARD_CLIENT_SECRET`. Fehlen sie, schlaegt jeder Lauf mit einer
+klaren Meldung fehl - still weiterlaufen und nichts sammeln waere schlimmer.
 
 ## Bekannte Einschraenkungen
 

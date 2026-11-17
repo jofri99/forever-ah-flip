@@ -1,31 +1,36 @@
 name: collect
 
-# Laeuft vorerst nur von Hand. Sobald `verify` in Actions durchlaeuft, den
-# schedule-Block einkommentieren - dann sammelt GitHub stuendlich, ohne dass
-# hier ein Rechner laufen muss.
+# Holt den Stand von Haus 114 und legt ihn im Branch `data` ab.
+#
+# Blizzard baut die Daten stuendlich gegen :19 neu. Drei Versuche je Stunde: der
+# erste kurz danach, die anderen fangen Verspaetungen des Schedulers ab. Ein Lauf
+# ohne neue Daten bekommt 304 zurueck, laedt nichts und schreibt nichts.
 on:
+  schedule:
+    - cron: "2,22,42 * * * *"
   workflow_dispatch:
-    inputs:
-      ruleset:
-        description: "Ruleset fuer die Stichprobe (leer = erstes mit Auktionshaeusern)"
-        required: false
-        type: string
-  # schedule:
-  #   - cron: "7 * * * *"   # stuendlich zur siebten Minute, UTC
 
 permissions:
-  contents: read
+  contents: write
 
+# Nie zwei Sammler gleichzeitig - sie wuerden denselben Branch beschreiben.
 concurrency:
   group: collect
   cancel-in-progress: false
 
 jobs:
-  verify:
+  collect:
     runs-on: ubuntu-latest
-    timeout-minutes: 20
+    timeout-minutes: 10
     steps:
-      - uses: actions/checkout@v4
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      - name: Warehouse auschecken (Branch data)
+        uses: actions/checkout@v4
+        with:
+          ref: data
+          path: data/warehouse
 
       - uses: actions/setup-python@v5
         with:
@@ -36,25 +41,44 @@ jobs:
       - name: Abhaengigkeiten installieren
         run: pip install -r requirements.txt
 
-      - name: Forever-Endpunkte pruefen
+      # Die rohe Momentaufnahme des letzten Standes. Sie gehoert nicht in Git, weil
+      # sie sich jedes Mal komplett aendert, muss aber von Lauf zu Lauf ueberleben -
+      # sonst fehlt der Vergleich, aus dem die Verkaeufe entstehen. Ist der Cache
+      # leer, gibt es fuer diesen einen Stand keine Verkaeufe, mehr nicht.
+      - name: Vergleichsstand holen
+        uses: actions/cache/restore@v4
+        with:
+          path: data/state
+          key: state-${{ github.run_id }}
+          restore-keys: state-
+
+      - name: Sammeln
+        id: collect
         env:
           BLIZZARD_CLIENT_ID: ${{ secrets.BLIZZARD_CLIENT_ID }}
           BLIZZARD_CLIENT_SECRET: ${{ secrets.BLIZZARD_CLIENT_SECRET }}
-          BLIZZARD_REGION: eu
-          BLIZZARD_LOCALE: de_DE
         run: |
-          if [ -z "$BLIZZARD_CLIENT_ID" ]; then
-            echo "::error::Secrets BLIZZARD_CLIENT_ID und BLIZZARD_CLIENT_SECRET fehlen."
-            echo "Anlegen unter Settings -> Secrets and variables -> Actions."
+          if [ -z "$BLIZZARD_CLIENT_ID" ] || [ -z "$BLIZZARD_CLIENT_SECRET" ]; then
+            echo "::error::Die Secrets BLIZZARD_CLIENT_ID und BLIZZARD_CLIENT_SECRET fehlen. Anlegen unter Settings -> Secrets and variables -> Actions."
             exit 1
           fi
-          python -m collector verify ${{ inputs.ruleset && format('--ruleset {0}', inputs.ruleset) || '' }}
+          python -m collector collect
 
-      - name: Bericht hochladen
-        if: always()
-        uses: actions/upload-artifact@v4
+      - name: Stand in den Branch data schreiben
+        if: steps.collect.outputs.new == 'true'
+        working-directory: data/warehouse
+        env:
+          SUMMARY: ${{ steps.collect.outputs.summary }}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git commit -q -m "$SUMMARY"
+          git push -q
+
+      - name: Vergleichsstand fuer den naechsten Lauf sichern
+        if: steps.collect.outputs.new == 'true'
+        uses: actions/cache/save@v4
         with:
-          name: verify-report
-          path: data/verify/*.json
-          if-no-files-found: ignore
-          retention-days: 30
+          path: data/state
+          key: state-${{ github.run_id }}

@@ -88,7 +88,14 @@ class Settings:
 
     @property
     def warehouse_dir(self) -> Path:
+        """Was dauerhaft bleibt. In Actions ist das der ausgecheckte Branch `data`."""
         return self.data_dir / "warehouse"
+
+    @property
+    def state_dir(self) -> Path:
+        """Die letzte rohe Momentaufnahme. Liegt absichtlich ausserhalb des Warehouse:
+        sie aendert sich bei jedem Stand komplett und hat in Git nichts verloren."""
+        return self.data_dir / "state"
 
     def require_credentials(self) -> None:
         missing = [

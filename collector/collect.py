@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import datetime as dt
 import logging
+import os
 import shutil
+import time
 from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
@@ -37,9 +39,6 @@ COMMODITY_COLUMNS = (
 )
 MAX_OBJECT = 400_000_000
 
-# Wie lange eine Auktion laut time_left mindestens noch laeuft. Verschwindet sie
-# frueher, kann sie nicht abgelaufen sein - dann wurde sie gekauft oder storniert.
-MIN_HOURS_LEFT = {"VERY_LONG": 12.0, "LONG": 2.0, "MEDIUM": 0.5}
 
 
 def _read_json_sql(path: Path, columns: str) -> str:
@@ -182,27 +181,38 @@ def diff_sales(
     return con.execute("SELECT count(*) FROM sales").fetchone()[0]
 
 
+def _snapshot_time(last_modified: str | None) -> dt.datetime:
+    """Der Stand der Daten als naive UTC-Zeit. Ohne Header bleibt nur die Uhr."""
+    if last_modified:
+        return parsedate_to_datetime(last_modified).astimezone(dt.timezone.utc).replace(tzinfo=None)
+    log.warning("Antwort ohne Last-Modified, nehme die aktuelle Zeit als Stand")
+    return dt.datetime.now(dt.timezone.utc).replace(tzinfo=None, microsecond=0)
+
+
 def run(
     settings: Settings,
     house: int | None = None,
     force: bool = False,
     keep_raw: bool = False,
+    client: BlizzardClient | None = None,
 ) -> dict[str, Any]:
     house = house or settings.house
     warehouse = settings.warehouse_dir
     raw_dir = settings.raw_dir / "current"
-    runs_path = store.dataset_path(warehouse, store.RUNS)
-    state_path = store.dataset_path(warehouse, store.SNAPSHOT)
+    state_path = settings.state_dir / f"house{house}.parquet"
 
-    started = dt.datetime.now(dt.timezone.utc)
+    started = dt.datetime.now(dt.timezone.utc).replace(tzinfo=None)
+    clock = time.perf_counter()
     result: dict[str, Any] = {"house": house, "skipped": False}
 
-    con = store.connect()
-    # Blizzard beantwortet If-Modified-Since mit 304. Damit kostet ein Durchlauf
-    # ohne neue Daten nichts, und der Cron darf oefter laufen als der Stundentakt.
-    known = None if force else store.last_seen_modified(con, runs_path)
+    # Blizzard beantwortet If-Modified-Since mit 304. Ein Durchlauf ohne neue Daten
+    # kostet damit nichts, und der Cron darf oefter laufen als der Stundentakt.
+    latest = store.latest_snapshot(warehouse, house)
+    known = None if force or latest is None else store.http_date(latest)
 
-    with BlizzardClient(settings) as client:
+    owns_client = client is None
+    client = client or BlizzardClient(settings)
+    try:
         auctions_file = raw_dir / f"house{house}_auctions.json"
         response = client.auctions(
             settings.ruleset, house, stream_to=auctions_file, if_modified_since=known
@@ -210,129 +220,162 @@ def run(
 
         if response.status == 304:
             log.info("Unveraendert seit %s", known)
-            result.update(skipped=True, last_modified=known, reason="unveraendert", bytes=0)
-            _log_run(con, runs_path, started, result, rows=0, items=0, sales=0)
+            result.update(skipped=True, reason="unveraendert", snapshot_ts=latest)
             return result
 
         if not response.ok:
             raise RuntimeError(f"Haus {house} antwortete mit {response.status}")
 
-        stamp = response.last_modified
-        snapshot_ts = parsedate_to_datetime(stamp).astimezone(dt.timezone.utc).replace(tzinfo=None)
-        result["last_modified"] = stamp
-        result["snapshot_ts"] = snapshot_ts
-        result["bytes"] = response.size
+        snapshot_ts = _snapshot_time(response.last_modified)
+        result.update(snapshot_ts=snapshot_ts, bytes=response.size)
 
-        if not force and snapshot_ts in store.known_snapshots(con, runs_path):
+        items_path = store.snapshot_path(warehouse, store.ITEMS, house, snapshot_ts)
+        if items_path.exists() and not force:
             log.info("Stand %s steckt schon im Warehouse", snapshot_ts)
             result.update(skipped=True, reason="schon verarbeitet")
             if not keep_raw:
                 shutil.rmtree(raw_dir, ignore_errors=True)
-            _log_run(con, runs_path, started, result, rows=0, items=0, sales=0)
             return result
 
-        commodities_file = raw_dir / f"house{house}_commodities.json"
+        commodities_file: Path | None = raw_dir / f"house{house}_commodities.json"
         commodity_response = client.commodities(settings.ruleset, house, stream_to=commodities_file)
         if commodity_response.ok:
             result["bytes"] += commodity_response.size
         else:
             log.warning("Commodities antworteten mit %s", commodity_response.status)
             commodities_file = None
+    finally:
+        if owns_client:
+            client.close()
 
-    rows = load_snapshot(con, auctions_file, commodities_file)
-    result["rows"] = rows
-    result["auctions"] = con.execute(
-        "SELECT count(*) FROM snap WHERE kind = 'auction'"
-    ).fetchone()[0]
-    result["commodities"] = rows - result["auctions"]
+    con = store.connect()
+    try:
+        rows = load_snapshot(con, auctions_file, commodities_file)
+        result["auctions"] = con.execute(
+            "SELECT count(*) FROM snap WHERE kind = 'auction'"
+        ).fetchone()[0]
+        result["commodities"] = rows - result["auctions"]
 
-    n_items = aggregate_items(con, snapshot_ts, house)
-    store.append_parquet(
-        con, "items", store.dataset_path(warehouse, store.ITEMS, snapshot_ts.date()),
-        order_by="item_id, kind, snapshot_ts",
-    )
-    result["items"] = n_items
+        result["items"] = aggregate_items(con, snapshot_ts, house)
+        store.write_parquet(con, "items", items_path, order_by="item_id, kind")
 
-    # Verkaeufe gibt es nur, wenn ein frueherer Stand vorliegt.
-    n_sales = 0
-    previous_rows = store.read_parquet(con, state_path, "prev")
-    if previous_rows:
-        previous_ts = con.execute("SELECT max(snapshot_ts) FROM prev").fetchone()[0]
-        if previous_ts and previous_ts < snapshot_ts:
-            n_sales = diff_sales(con, snapshot_ts, previous_ts, house)
-            store.append_parquet(
-                con, "sales", store.dataset_path(warehouse, store.SALES, snapshot_ts.date()),
-                order_by="item_id, kind, snapshot_ts",
-            )
-            totals = con.execute(
-                "SELECT sum(n_sold), sum(value_sold), sum(n_expired), sum(n_unclear), sum(n_new) FROM sales"
-            ).fetchone()
-            result.update(
-                sold=totals[0] or 0, value_sold=totals[1] or 0,
-                expired=totals[2] or 0, unclear=totals[3] or 0, new=totals[4] or 0,
-                previous_ts=previous_ts,
-            )
-    result["sales_rows"] = n_sales
+        # Verkaeufe gibt es nur, wenn ein frueherer Stand vorliegt.
+        result["sales_rows"] = 0
+        if store.read_parquet(con, state_path, "prev"):
+            previous_ts = con.execute("SELECT max(snapshot_ts) FROM prev").fetchone()[0]
+            if previous_ts and previous_ts < snapshot_ts:
+                result["sales_rows"] = diff_sales(con, snapshot_ts, previous_ts, house)
+                store.write_parquet(
+                    con, "sales",
+                    store.snapshot_path(warehouse, store.SALES, house, snapshot_ts),
+                    order_by="item_id, kind",
+                )
+                totals = con.execute(
+                    "SELECT sum(n_sold), sum(value_sold), sum(n_expired), sum(n_unclear), sum(n_new) "
+                    "FROM sales"
+                ).fetchone()
+                result.update(
+                    previous_ts=previous_ts,
+                    gap_hours=(snapshot_ts - previous_ts).total_seconds() / 3600.0,
+                    sold=int(totals[0] or 0),
+                    value_sold=int(totals[1] or 0),
+                    expired=int(totals[2] or 0),
+                    unclear=int(totals[3] or 0),
+                    new=int(totals[4] or 0),
+                )
 
-    # Diese Momentaufnahme ist der Vergleichsstand fuer den naechsten Durchlauf.
-    con.execute(
-        "CREATE OR REPLACE TEMP TABLE state AS SELECT ?::TIMESTAMP AS snapshot_ts, * FROM snap",
-        [snapshot_ts],
-    )
-    store.write_parquet(con, "state", state_path, order_by="auction_id")
+        # Diese Momentaufnahme ist der Vergleichsstand fuer den naechsten Durchlauf.
+        con.execute(
+            "CREATE OR REPLACE TEMP TABLE state AS SELECT ?::TIMESTAMP AS snapshot_ts, * FROM snap",
+            [snapshot_ts],
+        )
+        store.write_parquet(con, "state", state_path, order_by="auction_id")
 
-    _log_run(con, runs_path, started, result, rows=rows, items=n_items, sales=n_sales)
+        result["seconds"] = time.perf_counter() - clock
+        _log_run(con, warehouse, started, result)
+    finally:
+        con.close()
 
     if not keep_raw:
         shutil.rmtree(raw_dir, ignore_errors=True)
-
-    result["seconds"] = (dt.datetime.now(dt.timezone.utc) - started).total_seconds()
     return result
 
 
 def _log_run(
-    con: duckdb.DuckDBPyConnection,
-    runs_path: Path,
-    started: dt.datetime,
-    result: dict[str, Any],
-    rows: int,
-    items: int,
-    sales: int,
+    con: duckdb.DuckDBPyConnection, warehouse: Path, started: dt.datetime, result: dict[str, Any]
 ) -> None:
+    """Eine Zeile je verarbeitetem Stand. Laeufe ohne neue Daten hinterlassen nichts."""
     con.execute(
         """
         CREATE OR REPLACE TEMP TABLE run_row AS
         SELECT ?::TIMESTAMP AS run_at,
                ?::TIMESTAMP AS snapshot_ts,
-               ?::VARCHAR   AS last_modified,
                ?::INTEGER   AS house,
-               ?::BOOLEAN   AS skipped,
-               ?::BIGINT    AS rows_raw,
+               ?::INTEGER   AS auctions,
+               ?::INTEGER   AS commodities,
                ?::INTEGER   AS items,
-               ?::INTEGER   AS sales_rows,
-               ?::BIGINT    AS bytes
+               ?::TIMESTAMP AS previous_ts,
+               ?::DOUBLE    AS gap_hours,
+               ?::INTEGER   AS sold,
+               ?::BIGINT    AS value_sold,
+               ?::INTEGER   AS expired,
+               ?::INTEGER   AS unclear,
+               ?::INTEGER   AS new_listings,
+               ?::BIGINT    AS bytes,
+               ?::DOUBLE    AS seconds
         """,
         [
-            started.replace(tzinfo=None),
-            result.get("snapshot_ts"),
-            result.get("last_modified"),
+            started,
+            result["snapshot_ts"],
             result["house"],
-            result["skipped"],
-            rows,
-            items,
-            sales,
+            result["auctions"],
+            result["commodities"],
+            result["items"],
+            result.get("previous_ts"),
+            result.get("gap_hours"),
+            result.get("sold"),
+            result.get("value_sold"),
+            result.get("expired"),
+            result.get("unclear"),
+            result.get("new"),
             result.get("bytes", 0),
+            result.get("seconds", 0.0),
         ],
     )
-    store.append_parquet(con, "run_row", runs_path, order_by="run_at")
+    store.write_parquet(
+        con, "run_row", store.snapshot_path(warehouse, store.RUNS, result["house"], result["snapshot_ts"])
+    )
+
+
+def summary(result: dict[str, Any]) -> str:
+    """Eine Zeile, die auch als Commit-Nachricht im Daten-Branch taugt."""
+    if result["skipped"]:
+        return f"Nichts Neues ({result.get('reason', 'unveraendert')}), Stand {result.get('snapshot_ts')}"
+    line = (
+        f"Haus {result['house']}, Stand {result['snapshot_ts']} UTC: "
+        f"{result['items']} Items aus {result['auctions'] + result['commodities']} Zeilen"
+    )
+    if result.get("previous_ts"):
+        line += f", {result['sold']} verkauft"
+    return line
+
+
+def _github_output(**pairs: str) -> None:
+    """In GitHub Actions koennen spaetere Schritte auf diese Werte reagieren."""
+    target = os.environ.get("GITHUB_OUTPUT")
+    if not target:
+        return
+    with open(target, "a", encoding="utf-8") as handle:
+        for key, value in pairs.items():
+            handle.write(f"{key}={value}\n")
 
 
 def main(settings: Settings, house: int | None = None, force: bool = False, keep_raw: bool = False) -> int:
     result = run(settings, house=house, force=force, keep_raw=keep_raw)
+    _github_output(new="false" if result["skipped"] else "true", summary=summary(result))
 
     if result["skipped"]:
-        stand = result.get("snapshot_ts") or result.get("last_modified")
-        print(f"Nichts zu tun ({result.get('reason', 'unveraendert')}), Stand {stand}.")
+        print(summary(result))
         return 0
 
     print(f"Haus {result['house']}, Stand {result['snapshot_ts']} UTC")
@@ -343,12 +386,12 @@ def main(settings: Settings, house: int | None = None, force: bool = False, keep
     print(f"  {result['items']:>7} Items verdichtet")
     if result.get("previous_ts"):
         print(
-            f"  Vergleich mit {result['previous_ts']}: {result.get('sold', 0)} verkauft, "
-            f"{result.get('expired', 0)} abgelaufen, {result.get('unclear', 0)} unklar, "
-            f"{result.get('new', 0)} neu"
+            f"  Vergleich mit {result['previous_ts']} ({result['gap_hours']:.1f} h): "
+            f"{result['sold']} verkauft, {result['expired']} abgelaufen, "
+            f"{result['unclear']} unklar, {result['new']} neu"
         )
-        print(f"  Umsatz daraus: {(result.get('value_sold', 0) or 0) / 10000:.0f} Gold")
+        print(f"  Umsatz daraus: {result['value_sold'] / 10000:,.0f} Gold")
     else:
         print("  Kein frueherer Stand - Verkaeufe gibt es ab dem naechsten Durchlauf.")
-    print(f"  {result.get('seconds', 0):.1f}s")
+    print(f"  {result['seconds']:.1f}s")
     return 0
