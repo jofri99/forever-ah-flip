@@ -190,6 +190,55 @@ Darum liegt der Abzug in `data/local/` und nicht im Warehouse: er verlaesst dies
 nicht. `publish` nimmt die Namen von dort nur als Lueckenfueller, wenn der Abzug vorhanden
 ist - in Actions also nie. Die oeffentliche Seite zeigt damit nur Blizzards Namen.
 
+### Lokale Datenbank
+
+Staende, Stammdaten und der Abzug von ForeverDB liegen in verschiedenen Formaten an
+verschiedenen Orten. `db` legt eine DuckDB-Datei darueber, in der sich alles mit SQL
+verknuepfen laesst:
+
+```powershell
+python -m collector db                                   # baut data/local/forever.duckdb
+python -m collector sql "SELECT * FROM latest LIMIT 10"  # Abfrage ohne weiteres Werkzeug
+python -m collector sql --file abfrage.sql --rows 200
+```
+
+Die Datei enthaelt keine Daten, nur Sichten auf die vorhandenen Dateien. Nach einem
+`git -C data/warehouse pull` oder einem neuen Abzug ist sie deshalb ohne Neubau aktuell, und
+es gibt keine zweite Kopie, die veralten koennte. Neu gebaut werden muss sie nur, wenn sich
+die Sichten aendern oder das Projekt in einen anderen Ordner zieht.
+
+| Sicht | Inhalt |
+|---|---|
+| `snapshots` | jeder Stand jedes Items: Angebote, Menge, Preise |
+| `sales` | Verkaeufe, Ablaeufe und Neuzugaenge zwischen zwei Staenden |
+| `runs` | Protokoll der Sammellaeufe |
+| `blizzard_items` | Stammdaten aus Blizzards API, `raw` als JSON |
+| `foreverdb_items` | die Item-Liste von ForeverDB; weitere Listen als `foreverdb_vendors` usw. |
+| `items` | beide Quellen zusammengefuehrt: Blizzard gilt zuerst, ForeverDB fuellt auf |
+| `latest` | der juengste Stand mit Namen und Haendlerpreisen |
+| `history` | `snapshots` mit Namen und den Verkaeufen seit dem Stand davor |
+| `sold_daily` | Verkaeufe je Item und Tag, mit `hours_covered` |
+
+Dazu zwei Helfer: `money(123456)` ergibt `12g 34s 56c`, `gold(123456)` ergibt `12.35`.
+
+```sql
+-- Was hat sich heute am meisten verkauft?
+SELECT name, qty_sold, money(value_sold) AS umsatz, hours_covered
+FROM sold_daily WHERE day = current_date ORDER BY value_sold DESC LIMIT 20;
+
+-- Angebote unter dem, was ein Haendler zahlt
+SELECT name, n_listings, money(min_price) AS angebot, money(vendor_sell) AS haendler
+FROM latest WHERE vendor_sell > min_price ORDER BY vendor_sell - min_price DESC;
+
+-- In die vollstaendige Antwort greifen
+SELECT name, raw->>'$.preview_item.armor.value' AS armor
+FROM blizzard_items WHERE inventory_type = 'CHEST' AND quality = 'RARE';
+```
+
+Die Datei laesst sich auch mit DBeaver, der DuckDB-Kommandozeile oder einer
+DuckDB-Erweiterung fuer VS Code oeffnen. DuckDB erlaubt dabei nur ein Programm, das schreibt:
+solange ein anderes die Datei offen hat, schlaegt `db` fehl und sagt das.
+
 ### Dateien fuer die Anzeige
 
 Eine Datei je Stand ist gut zum Sammeln und schlecht zum Anzeigen: der Verlauf eines Items
@@ -466,6 +515,7 @@ collector/
   collect.py    ein Durchlauf: holen, verdichten, Verkaeufe ableiten
   names.py      Stammdaten der Items: Namen, Haendlerpreise, volle Antwort
   foreverdb.py  Client fuer ForeverDB mit Tempolimit; foreverdb_dump.py zieht Listen lokal ab
+  db.py         lokale DuckDB-Datei mit Sichten auf alle Daten; Kommandos db und sql
   publish.py    baut die Dateien fuer die Oberflaeche
   store.py      Pfade und Parquet-Dateien des Warehouse
   __main__.py   py -m collector <kommando>

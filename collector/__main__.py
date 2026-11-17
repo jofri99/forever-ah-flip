@@ -38,6 +38,13 @@ def build_parser() -> argparse.ArgumentParser:
     foreverdb.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
     foreverdb.add_argument("--restart", action="store_true", help="von vorn beginnen statt fortsetzen")
 
+    sub.add_parser("db", help="baut die lokale DuckDB-Datei mit Sichten auf alle Daten")
+
+    sql = sub.add_parser("sql", help="fuehrt eine Abfrage gegen die lokale Datenbank aus")
+    sql.add_argument("query", nargs="?", default=None, help="SQL; ohne Angabe wird --file gelesen")
+    sql.add_argument("--file", type=Path, default=None, help="Datei mit der Abfrage")
+    sql.add_argument("--rows", type=int, default=50, help="hoechstens so viele Zeilen zeigen")
+
     publish = sub.add_parser("publish", help="baut aus dem Warehouse die Dateien fuer die Anzeige")
     publish.add_argument("--days", type=int, default=14, help="Zeitfenster in Tagen (Vorgabe 14)")
     publish.add_argument("--out", type=Path, default=None, help="Zielordner (Vorgabe web/public/data)")
@@ -82,6 +89,26 @@ def main(argv: list[str] | None = None) -> int:
         except ForeverDBError as exc:
             print(exc, file=sys.stderr)
             return 2
+
+    # Die Datenbank schaut nur auf vorhandene Dateien und braucht keine Zugangsdaten.
+    if args.command == "db":
+        from . import db as db_module
+
+        return db_module.main(config)
+
+    if args.command == "sql":
+        from . import db as db_module
+
+        statement = args.query or (args.file.read_text(encoding="utf-8") if args.file else None)
+        if not statement:
+            print("Keine Abfrage angegeben. Beispiel: python -m collector sql \"SELECT * FROM latest LIMIT 5\"", file=sys.stderr)
+            return 2
+        try:
+            db_module.query(config, statement, max_rows=args.rows)
+        except Exception as exc:  # SQL-Fehler sollen lesbar ankommen, nicht als Traceback
+            print(f"Abfrage fehlgeschlagen: {exc}", file=sys.stderr)
+            return 1
+        return 0
 
     # publish liest nur das Warehouse und braucht keine Zugangsdaten.
     if args.command == "publish":
