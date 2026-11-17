@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 import logging
 import sys
+from pathlib import Path
 
 from .config import settings as load_settings
 
@@ -28,6 +29,11 @@ def build_parser() -> argparse.ArgumentParser:
     collect.add_argument("--force", action="store_true", help="auch einen schon bekannten Stand verarbeiten")
     collect.add_argument("--keep-raw", action="store_true", help="heruntergeladene JSONs behalten")
 
+    publish = sub.add_parser("publish", help="baut aus dem Warehouse die Dateien fuer die Anzeige")
+    publish.add_argument("--days", type=int, default=14, help="Zeitfenster in Tagen (Vorgabe 14)")
+    publish.add_argument("--out", type=Path, default=None, help="Zielordner (Vorgabe site/data)")
+    publish.add_argument("--house", type=int, default=None, help="Auktionshaus (Vorgabe 114)")
+
     return parser
 
 
@@ -50,6 +56,12 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Client-ID   {'gesetzt' if config.client_id else 'FEHLT'}")
         print(f"Secret      {'gesetzt' if config.client_secret else 'FEHLT'}")
         return 0
+
+    # publish liest nur das Warehouse und braucht keine Zugangsdaten.
+    if args.command == "publish":
+        from . import publish as publish_module
+
+        return publish_module.main(config, out_dir=args.out, house=args.house, days=args.days)
 
     try:
         config.require_credentials()

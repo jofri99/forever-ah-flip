@@ -107,14 +107,29 @@ def read_parquet(con: duckdb.DuckDBPyConnection, path: Path, into: str) -> int:
     return con.execute(f"SELECT count(*) FROM {into}").fetchone()[0]
 
 
-def write_parquet(con: duckdb.DuckDBPyConnection, relation: str, path: Path, order_by: str = "") -> int:
+def write_parquet(
+    con: duckdb.DuckDBPyConnection,
+    relation: str,
+    path: Path,
+    order_by: str = "",
+    compression: str = "zstd",
+    row_group_size: int | None = None,
+) -> int:
     """Schreibt erst daneben und benennt dann um, damit nie eine halbe Datei liegen bleibt."""
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     order = f" ORDER BY {order_by}" if order_by else ""
-    con.execute(
-        f"COPY (SELECT * FROM {relation}{order}) TO '{sql_path(temporary)}' "
-        "(FORMAT parquet, COMPRESSION zstd)"
-    )
+    options = f"FORMAT parquet, COMPRESSION {compression}"
+    if row_group_size:
+        options += f", ROW_GROUP_SIZE {int(row_group_size)}"
+    con.execute(f"COPY (SELECT * FROM {relation}{order}) TO '{sql_path(temporary)}' ({options})")
     os.replace(temporary, path)
     return con.execute(f"SELECT count(*) FROM {relation}").fetchone()[0]
+
+
+def dataset_glob(root: Path, dataset: str, house: int) -> str | None:
+    """Alle Dateien eines Datensatzes als Muster fuer read_parquet, oder None, wenn es keine gibt."""
+    base = root / dataset / f"house={house}"
+    if not base.is_dir() or next(base.glob("dt=*/*.parquet"), None) is None:
+        return None
+    return sql_path(base / "*" / "*.parquet")

@@ -16,3 +16,6 @@ __pycache__/
 
 # Zugangsdaten
 .env
+
+# Abgeleitete Dateien fuer die Anzeige, jederzeit neu baubar
+site/data/

@@ -112,6 +112,34 @@ git -C data/warehouse pull                # danach zum Aktualisieren
 Lokal sammelt man dann besser nicht in dasselbe Verzeichnis, sonst kollidieren die Dateien
 beim naechsten `pull`. Fuer Experimente: `$env:AH_DATA_DIR = "data/dev"`.
 
+### Dateien fuer die Anzeige
+
+Eine Datei je Stand ist gut zum Sammeln und schlecht zum Anzeigen: der Verlauf eines Items
+ueber 14 Tage laege in 336 Dateien. `publish` baut daraus eine Form, die ein Browser mit
+wenigen Teilabrufen lesen kann:
+
+```powershell
+python -m collector publish            # 14 Tage nach site/data
+python -m collector publish --days 30
+```
+
+| Datei | Inhalt |
+|---|---|
+| `hourly.parquet` | alle Staende des Zeitfensters mit Preisen, Mengen und Verkaeufen, nach Item sortiert und in Zeilengruppen von 8192 geschnitten |
+| `market.parquet` | der juengste Stand, eine Zeile je Item, dazu Tief, Hoch, Veraenderung und Verkaeufe der letzten 24 Stunden |
+| `meta.json` | Zeitraum, Anzahl Staende, Dateigroessen |
+
+Wer ein Item will, liest am Ende von `hourly.parquet` nach, in welcher Zeilengruppe es
+liegt, und holt nur die. Zeit steht als Unix-Sekunden drin, Preise als `DOUBLE` - beides
+kommt im Browser als gewoehnliche Zahl an. Komprimiert wird mit Snappy, weil schlanke
+Parquet-Leser das ohne Zusatzpaket verstehen.
+
+`sales_hours_24h` in `market.parquet` sagt, wie viele der letzten 24 Stunden durch
+Vergleiche gedeckt sind. Steht dort 6, sind die Verkaufszahlen ein Viertel der Wahrheit.
+
+Die Dateien sind abgeleitet und jederzeit neu baubar, `site/data/` steht deshalb in
+`.gitignore`.
+
 ### Wie Verkaeufe entstehen
 
 Auktionen haben IDs. Verschwindet eine zwischen zwei Staenden, wird sie danach eingeordnet,
