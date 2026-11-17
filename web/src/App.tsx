@@ -149,7 +149,9 @@ export function App() {
                 <SelectItem value="commodity">Commodities</SelectItem>
               </SelectContent>
             </Select>
-            <span className="text-sm text-muted-foreground">{formatInt(rows.length)} items</span>
+            <span className="text-sm text-muted-foreground">
+              {formatInt(rows.length)} {rows.length === 1 ? "item" : "items"}
+            </span>
           </div>
 
           <MarketTable

@@ -187,6 +187,10 @@ def build(
         official = names.names_from_known(con)
         fallback = foreverdb_dump.english_names(con, settings)
         item_names = {**fallback, **official}
+        # Nur Items, die im Zeitfenster vorkommen. ForeverDB kennt 23.770 Items, die
+        # Seite zeigt gut 6.000 - der Rest waere bei jedem Laden mitgeschleppter Ballast.
+        shown = {str(row[0]) for row in con.execute("SELECT DISTINCT item_id FROM hourly").fetchall()}
+        item_names = {item_id: name for item_id, name in item_names.items() if item_id in shown}
         names_file = out_dir / NAMES
         if item_names:
             names_file.write_text(
