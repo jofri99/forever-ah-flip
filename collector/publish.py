@@ -23,7 +23,7 @@ from typing import Any
 
 import duckdb
 
-from . import names, store
+from . import foreverdb_dump, names, store
 from .config import ROOT, Settings
 
 HOURLY = "hourly.parquet"
@@ -168,7 +168,7 @@ def build(
 
         hourly_rows = _build_hourly(con, since)
         # Stammdaten (Namen, Haendlerpreise) stehen im Warehouse unter ref/items.
-        names.load_known(con, settings.warehouse_dir)
+        names.load_known(con, settings.warehouse_dir, settings.locale)
         market_rows = _build_market(con)
 
         store.write_parquet(
@@ -181,17 +181,20 @@ def build(
             order_by="item_id, kind", compression=COMPRESSION,
         )
 
-        # Ohne Namen zeigt die Seite "Item 2589".
-        item_names = names.names_from_known(con)
+        # Ohne Namen zeigt die Seite "Item 2589". Zuerst gilt Blizzards Name. Wo Blizzard
+        # ein Item nicht kennt, fuellt ein lokaler Abzug von ForeverDB auf - den gibt es
+        # nur auf diesem Rechner, in Actions also nie.
+        official = names.names_from_known(con)
+        fallback = foreverdb_dump.english_names(con, settings)
+        item_names = {**fallback, **official}
         names_file = out_dir / NAMES
         if item_names:
             names_file.write_text(
                 json.dumps(item_names, ensure_ascii=False, separators=(",", ":")), encoding="utf-8"
             )
-        named_in_market = con.execute(
-            "SELECT count(DISTINCT item_id) FROM market WHERE item_id IN "
-            "(SELECT item_id FROM known WHERE status = 200 AND name IS NOT NULL)"
-        ).fetchone()[0] if item_names else 0
+        market_ids = [str(row[0]) for row in con.execute("SELECT DISTINCT item_id FROM market").fetchall()]
+        named_in_market = sum(1 for item_id in market_ids if item_id in item_names)
+        named_official = sum(1 for item_id in market_ids if item_id in official)
 
         first_ts, last_ts, snapshots, with_sales = con.execute(
             "SELECT min(ts), max(ts), count(DISTINCT ts), "
@@ -215,6 +218,7 @@ def build(
         # Die Seite fragt names.json nur ab, wenn hier true steht.
         "names": (out_dir / NAMES).is_file(),
         "items_with_name": named_in_market,
+        "name_sources": {"blizzard": named_official, "foreverdb": named_in_market - named_official},
         "files": {
             HOURLY: {
                 "rows": hourly_rows,
@@ -246,6 +250,10 @@ def main(settings: Settings, out_dir: Path | None = None, house: int | None = No
         f"{hourly['row_groups']} Zeilengruppen"
     )
     print(f"  {MARKET:<15} {market['rows']:>9,} Zeilen, {market['bytes'] / 1024:>8,.0f} KB")
-    print(f"  Namen fuer {meta['items_with_name']:,} von {meta['items']:,} Items")
+    sources = meta["name_sources"]
+    print(
+        f"  Namen fuer {meta['items_with_name']:,} von {meta['items']:,} Items "
+        f"({sources['blizzard']:,} von Blizzard, {sources['foreverdb']:,} von ForeverDB)"
+    )
     print(f"  nach {target}")
     return 0

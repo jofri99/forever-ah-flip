@@ -75,9 +75,9 @@ export function ItemDetail({ meta, row, names, onClose }: ItemDetailProps) {
   const hours = row.sales_hours_24h
   const coverage =
     row.qty_sold_24h == null
-      ? "noch kein Vergleich"
+      ? "no comparison yet"
       : hours != null && hours < 23
-        ? `aus ${Math.round(hours)} von 24 h`
+        ? `from ${Math.round(hours)} of 24 h`
         : undefined
 
   // Liegt das guenstigste Angebot unter dem, was ein Haendler zahlt, ist der
@@ -92,51 +92,51 @@ export function ItemDetail({ meta, row, names, onClose }: ItemDetailProps) {
           {itemName(row.item_id, names)}
           <Badge variant="outline">{kindLabel(row.kind)}</Badge>
           <a
-            href={`https://www.wowhead.com/classic/de/item=${row.item_id}`}
+            href={`https://foreverdb.net/item/${row.item_id}`}
             target="_blank"
             rel="noopener noreferrer"
             className="inline-flex items-center gap-1 text-sm font-normal text-muted-foreground hover:text-foreground"
           >
-            Wowhead <ExternalLink className="size-3" aria-hidden />
+            ForeverDB <ExternalLink className="size-3" aria-hidden />
           </a>
         </CardTitle>
         <CardAction>
-          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Schließen">
+          <Button variant="ghost" size="icon" onClick={onClose} aria-label="Close">
             <X />
           </Button>
         </CardAction>
       </CardHeader>
       <CardContent className="flex flex-col gap-4">
         <div className="flex flex-wrap gap-3">
-          <Tile label="Günstigster">
+          <Tile label="Lowest">
             <Money value={row.min_price} />
           </Tile>
           <Tile label="Median">
             <Money value={row.median_price} />
           </Tile>
-          <Tile label="Angebote" note={<><Count value={row.quantity} /> Stück</>}>
+          <Tile label="Listings" note={<><Count value={row.quantity} /> units</>}>
             <Count value={row.n_listings} />
           </Tile>
-          <Tile label="24 h Tief / Hoch">
+          <Tile label="24h low / high">
             <Money value={row.low_24h} /> / <Money value={row.high_24h} />
           </Tile>
-          <Tile label="Veränderung 24 h">
+          <Tile label="Change 24h">
             <Change value={row.change_24h_pct} />
           </Tile>
-          <Tile label="Verkauft 24 h" note={coverage}>
+          <Tile label="Sold 24h" note={coverage}>
             <Count value={row.qty_sold_24h} />
           </Tile>
-          <Tile label="Händler zahlt" note={belowVendor ? "Angebot liegt darunter" : undefined}>
+          <Tile label="Vendor pays" note={belowVendor ? "lowest listing is below this" : undefined}>
             <Money value={row.vendor_sell} />
           </Tile>
-          <Tile label="Händler-Listenpreis" note="nicht jedes Item führt ein Händler">
+          <Tile label="Vendor list price" note="not every item is sold by a vendor">
             <Money value={row.vendor_buy} />
           </Tile>
         </div>
 
         {loaded.state === "error" ? (
           <p className="text-sm text-destructive">
-            Der Verlauf konnte nicht geladen werden: {loaded.message}
+            The price history could not be loaded: {loaded.message}
           </p>
         ) : (
           <div className="relative">
@@ -146,18 +146,18 @@ export function ItemDetail({ meta, row, names, onClose }: ItemDetailProps) {
         )}
 
         <div className="flex flex-wrap gap-x-5 gap-y-1 text-xs text-muted-foreground">
-          <LegendLine className="border-t-2 border-price">günstigster Preis</LegendLine>
-          <LegendLine className="border-t border-dashed border-muted-foreground">Median</LegendLine>
+          <LegendLine className="border-t-2 border-price">lowest price</LegendLine>
+          <LegendLine className="border-t border-dashed border-muted-foreground">median</LegendLine>
           <LegendLine className="h-2.5 bg-bars">
-            {hasSales ? "verkaufte Menge je Stand" : "Angebote"}
+            {hasSales ? "quantity sold per snapshot" : "listings"}
           </LegendLine>
         </div>
 
         {loaded.state === "ready" && (series.length < 24 || !hasSales) && (
           <p className="text-xs text-muted-foreground">
-            {series.length < 24 && `Erst ${series.length} Stände – der Verlauf füllt sich stündlich. `}
+            {series.length < 24 && `Only ${series.length} snapshots so far – the history fills in hourly. `}
             {!hasSales &&
-              "Verkaufszahlen erscheinen, sobald zwei aufeinanderfolgende Stände verglichen wurden."}
+              "Sales figures appear once two consecutive snapshots have been compared."}
           </p>
         )}
       </CardContent>

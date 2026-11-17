@@ -90,7 +90,7 @@ def test_request_carries_namespace_and_locale() -> None:
     call = session.get_calls[0]
     assert call["url"] == "https://eu.api.blizzard.com/data/wow/ruleset/index"
     assert call["params"]["namespace"] == "dynamic-forever-eu"
-    assert call["params"]["locale"] == "de_DE"
+    assert call["params"]["locale"] == "en_US"
     assert call["headers"]["Authorization"] == "Bearer token-1"
     assert response.ok and response.data == {"rulesets": [{"id": 2}]}
 

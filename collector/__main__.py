@@ -33,6 +33,11 @@ def build_parser() -> argparse.ArgumentParser:
     names.add_argument("--limit", type=int, default=None, help="hoechstens so viele Items pruefen")
     names.add_argument("--house", type=int, default=None, help="Auktionshaus (Vorgabe 114)")
 
+    foreverdb = sub.add_parser("foreverdb", help="zieht Listen von ForeverDB lokal ab (fortsetzbar)")
+    foreverdb.add_argument("lists", nargs="*", default=["items"], help="items, vendors, quests, spells, itemsets")
+    foreverdb.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
+    foreverdb.add_argument("--restart", action="store_true", help="von vorn beginnen statt fortsetzen")
+
     publish = sub.add_parser("publish", help="baut aus dem Warehouse die Dateien fuer die Anzeige")
     publish.add_argument("--days", type=int, default=14, help="Zeitfenster in Tagen (Vorgabe 14)")
     publish.add_argument("--out", type=Path, default=None, help="Zielordner (Vorgabe web/public/data)")
@@ -60,6 +65,23 @@ def main(argv: list[str] | None = None) -> int:
         print(f"Client-ID   {'gesetzt' if config.client_id else 'FEHLT'}")
         print(f"Secret      {'gesetzt' if config.client_secret else 'FEHLT'}")
         return 0
+
+    # ForeverDB hat einen eigenen Schluessel und braucht die von Blizzard nicht.
+    if args.command == "foreverdb":
+        from . import foreverdb_dump
+        from .foreverdb import ForeverDBError
+
+        unknown = [name for name in args.lists if name not in foreverdb_dump.LISTS]
+        if unknown:
+            print(f"Unbekannte Liste: {', '.join(unknown)}. Moeglich: {', '.join(foreverdb_dump.LISTS)}", file=sys.stderr)
+            return 2
+        try:
+            return foreverdb_dump.main(
+                config, args.lists, max_requests=args.max_requests, restart=args.restart
+            )
+        except ForeverDBError as exc:
+            print(exc, file=sys.stderr)
+            return 2
 
     # publish liest nur das Warehouse und braucht keine Zugangsdaten.
     if args.command == "publish":

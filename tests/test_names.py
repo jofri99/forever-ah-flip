@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import dataclasses
 import datetime as dt
 import json
 from pathlib import Path
@@ -85,7 +86,7 @@ def settings(tmp_path: Path) -> Settings:
 def known_rows(settings: Settings) -> dict[int, tuple]:
     con = store.connect()
     try:
-        names.load_known(con, settings.warehouse_dir)
+        names.load_known(con, settings.warehouse_dir, settings.locale)
         return {
             row[0]: row[1:]
             for row in con.execute(
@@ -151,14 +152,44 @@ def test_older_files_without_newer_columns_still_load(settings: Settings) -> Non
     finally:
         con.close()
 
+    # Solche Dateien stammen aus der Zeit, als auf Deutsch abgerufen wurde.
+    german = dataclasses.replace(settings, locale="de_DE")
     client = FakeItems()
-    names.run(settings, client=client, now=NOW)
+    names.run(german, client=client, now=NOW)
 
     # Das schon bekannte Item wird nicht erneut gefragt, die uebrigen schon.
     assert client.asked == [7, 12359, 99999]
-    rows = known_rows(settings)
+    rows = known_rows(german)
     assert rows[2589][:2] == (200, "Leinenstoff")
     assert len(rows) == 4
+
+
+def test_changing_the_language_refetches_found_items_but_not_misses(settings: Settings) -> None:
+    german = dataclasses.replace(settings, locale="de_DE")
+    names.run(german, client=FakeItems(), now=NOW)
+
+    # Umstellung auf Englisch: was es gibt, wird neu geholt. Fehlanzeigen haengen
+    # nicht an der Sprache und bleiben bekannt.
+    english = dataclasses.replace(settings, locale="en_US")
+    client = FakeItems()
+    result = names.run(english, client=client, now=NOW + dt.timedelta(hours=1))
+    assert client.asked == [2589, 12359]
+    assert result["found"] == 2
+
+    # Danach ist Ruhe - und in der Tagesdatei steht jedes Item nur noch einmal.
+    client = FakeItems()
+    names.run(english, client=client, now=NOW + dt.timedelta(hours=2))
+    assert client.asked == []
+
+    con = store.connect()
+    try:
+        path = names.day_path(settings.warehouse_dir, NOW.date())
+        rows = con.execute(
+            f"SELECT item_id, locale, status FROM read_parquet('{store.sql_path(path)}') ORDER BY item_id"
+        ).fetchall()
+    finally:
+        con.close()
+    assert rows == [(7, "de_DE", 404), (2589, "en_US", 200), (12359, "en_US", 200), (99999, "de_DE", 404)]
 
 
 def test_second_run_asks_nothing(settings: Settings) -> None:

@@ -40,7 +40,7 @@ function ThemeToggle() {
       variant="ghost"
       size="icon"
       onClick={() => setTheme(dark ? "light" : "dark")}
-      aria-label={dark ? "Helles Design" : "Dunkles Design"}
+      aria-label={dark ? "Light theme" : "Dark theme"}
     >
       {dark ? <Sun /> : <Moon />}
     </Button>
@@ -89,14 +89,14 @@ export function App() {
     <div className="mx-auto flex min-h-svh max-w-7xl flex-col gap-4 p-4 md:p-6">
       <header className="flex items-start justify-between gap-4">
         <div>
-          <h1 className="text-xl font-semibold tracking-tight">Forever AH – Horde, Ruleset Normal</h1>
+          <h1 className="text-xl font-semibold tracking-tight">Forever AH – Horde, Normal ruleset</h1>
           <p className="text-sm text-muted-foreground">
             {ready
-              ? `Stand ${formatDateTime(ready.meta.last_snapshot)} · ${formatInt(ready.meta.items)} Items · ` +
-                `${ready.meta.snapshots} Stände seit ${formatDateTime(ready.meta.first_snapshot)}`
+              ? `As of ${formatDateTime(ready.meta.last_snapshot)} · ${formatInt(ready.meta.items)} items · ` +
+                `${ready.meta.snapshots} snapshots since ${formatDateTime(ready.meta.first_snapshot)}`
               : status.state === "loading"
-                ? "Lade Daten …"
-                : "Keine Daten"}
+                ? "Loading data …"
+                : "No data"}
           </p>
         </div>
         <ThemeToggle />
@@ -104,8 +104,8 @@ export function App() {
 
       {status.state === "error" && (
         <p className="rounded-lg border border-destructive/40 p-4 text-sm text-destructive">
-          Die Daten konnten nicht geladen werden ({status.message}). Lokal zuerst{" "}
-          <code>python -m collector publish</code> ausführen.
+          The data could not be loaded ({status.message}). Locally, run{" "}
+          <code>python -m collector publish</code> first.
         </p>
       )}
 
@@ -135,21 +135,21 @@ export function App() {
               type="search"
               value={query}
               onChange={(event) => setQuery(event.target.value)}
-              placeholder="Item oder ID suchen …"
-              aria-label="Item oder ID suchen"
+              placeholder="Search item or ID …"
+              aria-label="Search item or ID"
               className="max-w-sm"
             />
             <Select value={kind} onValueChange={(value) => setKind(value as KindFilter)}>
-              <SelectTrigger className="w-44" aria-label="Art">
+              <SelectTrigger className="w-44" aria-label="Type">
                 <SelectValue />
               </SelectTrigger>
               <SelectContent>
-                <SelectItem value="all">Alle Arten</SelectItem>
-                <SelectItem value="auction">Einzelstücke</SelectItem>
-                <SelectItem value="commodity">Stapelware</SelectItem>
+                <SelectItem value="all">All types</SelectItem>
+                <SelectItem value="auction">Single items</SelectItem>
+                <SelectItem value="commodity">Commodities</SelectItem>
               </SelectContent>
             </Select>
-            <span className="text-sm text-muted-foreground">{formatInt(rows.length)} Items</span>
+            <span className="text-sm text-muted-foreground">{formatInt(rows.length)} items</span>
           </div>
 
           <MarketTable
@@ -164,7 +164,7 @@ export function App() {
       )}
 
       <footer className="mt-auto pt-4 text-xs text-muted-foreground">
-        Daten: Battle.net-API von Blizzard, stündlich gesammelt. Preise je Stück. Diagramme:{" "}
+        Data: Blizzard Battle.net API, collected hourly. Prices per unit. Charts:{" "}
         <a
           href="https://www.tradingview.com/"
           target="_blank"
@@ -174,6 +174,21 @@ export function App() {
           TradingView Lightweight Charts
         </a>
         .
+        {ready?.meta.name_sources && ready.meta.name_sources.foreverdb > 0 && (
+          <>
+            {" "}
+            Some names from{" "}
+            <a
+              href="https://foreverdb.net"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="underline underline-offset-2"
+            >
+              ForeverDB.net
+            </a>
+            .
+          </>
+        )}
       </footer>
     </div>
   )

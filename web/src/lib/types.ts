@@ -49,6 +49,8 @@ export interface Meta {
   snapshots_with_sales: number
   items: number
   names: boolean
+  /** Wie viele Items im Markt ihren Namen aus welcher Quelle haben. */
+  name_sources?: { blizzard: number; foreverdb: number }
 }
 
 /** Item-ID als Text -> Name. Fehlt ein Eintrag, zeigt die Seite "Item 2589". */

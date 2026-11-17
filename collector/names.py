@@ -1,7 +1,7 @@
 """Stammdaten zu den Items: alles, was Blizzards statische API hergibt.
 
-Die Auktionsdaten kennen nur Item-IDs. Die statische API liefert dazu deutsche
-Namen, Qualitaet, Haendlerpreise, Ausruestungsplatz und die Werte eines
+Die Auktionsdaten kennen nur Item-IDs. Die statische API liefert dazu Namen
+(in der Sprache aus BLIZZARD_LOCALE, Vorgabe Englisch), Qualitaet, Haendlerpreise, Ausruestungsplatz und die Werte eines
 Gegenstands - aber laengst nicht fuer jedes Item: bei einer Stichprobe aus dem
 Markt antwortete sie fuer gut die Haelfte, der Rest ergab 404.
 
@@ -57,7 +57,11 @@ FIELDS: dict[str, str] = {
     "icon": "VARCHAR",               # Adresse des Icons
     "raw": "VARCHAR",                # die ganze Antwort als JSON
     "checked_at": "TIMESTAMP",
+    "locale": "VARCHAR",             # in welcher Sprache name und raw abgerufen wurden
 }
+
+# Dateien aus der Zeit vor der Spalte `locale` wurden auf Deutsch abgerufen.
+LEGACY_LOCALE = "de_DE"
 SCHEMA = ", ".join(f"{name} {kind}" for name, kind in FIELDS.items())
 PLACEHOLDERS = ", ".join("?" for _ in FIELDS)
 
@@ -70,20 +74,35 @@ def day_path(warehouse: Path, day: dt.date) -> Path:
     return ref_dir(warehouse) / f"dt={day:%Y-%m-%d}.parquet"
 
 
-def load_known(con: duckdb.DuckDBPyConnection, warehouse: Path) -> int:
-    """Baut `known`: je Item die juengste Pruefung."""
+def load_known(con: duckdb.DuckDBPyConnection, warehouse: Path, locale: str | None = None) -> int:
+    """Baut `known`: je Item die juengste Pruefung.
+
+    Mit `locale` zaehlen gefundene Items nur, wenn sie in dieser Sprache vorliegen.
+    Wird die Sprache umgestellt, gelten sie damit als offen und werden neu geholt.
+    Fehlanzeigen haengen nicht an der Sprache und bleiben bekannt.
+    """
     con.execute(f"CREATE OR REPLACE TEMP TABLE known ({SCHEMA})")
     base = ref_dir(warehouse)
     if not base.is_dir() or next(base.glob("dt=*.parquet"), None) is None:
         return 0
     con.execute(
         f"""
-        INSERT INTO known BY NAME
+        CREATE OR REPLACE TEMP TABLE known_all ({SCHEMA});
+        INSERT INTO known_all BY NAME
         SELECT * FROM read_parquet('{store.sql_path(base / "dt=*.parquet")}',
-                                   union_by_name = true, hive_partitioning = false)
-        QUALIFY row_number() OVER (PARTITION BY item_id ORDER BY checked_at DESC) = 1
+                                   union_by_name = true, hive_partitioning = false);
         """
     )
+    con.execute(
+        """
+        INSERT INTO known
+        SELECT * FROM known_all
+        WHERE CAST(? AS VARCHAR) IS NULL OR status <> 200 OR coalesce(locale, ?) = ?
+        QUALIFY row_number() OVER (PARTITION BY item_id ORDER BY checked_at DESC) = 1
+        """,
+        [locale, LEGACY_LOCALE, locale],
+    )
+    con.execute("DROP TABLE known_all")
     return con.execute("SELECT count(*) FROM known").fetchone()[0]
 
 
@@ -143,10 +162,12 @@ def fetch_icon(client: BlizzardClient, item_id: int) -> str | None:
     return None
 
 
-def fetch_item(client: BlizzardClient, item_id: int, now: dt.datetime) -> dict[str, Any] | None:
+def fetch_item(
+    client: BlizzardClient, item_id: int, now: dt.datetime, locale: str | None = None
+) -> dict[str, Any] | None:
     """Eine Zeile fuer die Ablage, oder None, wenn die Antwort nichts aussagt (5xx, 429)."""
     row: dict[str, Any] = dict.fromkeys(FIELDS)
-    row.update(item_id=item_id, checked_at=now)
+    row.update(item_id=item_id, checked_at=now, locale=locale)
 
     response = client.get(f"/data/wow/item/{item_id}", namespace="static")
     if response.status == 404:
@@ -191,7 +212,7 @@ def run(
 
     con = store.connect()
     try:
-        known = load_known(con, warehouse)
+        known = load_known(con, warehouse, settings.locale)
         ids = market_item_ids(con, settings, house)
         todo = pending_ids(con, ids, now)
         result: dict[str, Any] = {
@@ -212,7 +233,7 @@ def run(
         rows: list[dict[str, Any]] = []
         try:
             for item_id in todo:
-                row = fetch_item(client, item_id, now)
+                row = fetch_item(client, item_id, now, settings.locale)
                 if row is None:
                     result["failed"] += 1
                     continue
@@ -235,7 +256,13 @@ def run(
                 f"INSERT INTO merged ({', '.join(FIELDS)}) VALUES ({PLACEHOLDERS})",
                 [tuple(row[field] for field in FIELDS) for row in rows],
             )
-            store.write_parquet(con, "merged", path, order_by="item_id, checked_at")
+            # Wurde ein Item heute schon einmal geprueft - etwa in anderer Sprache -,
+            # bleibt nur die juengste Zeile. Sonst haengt der ueberholte Stand mit dran.
+            con.execute(
+                "CREATE OR REPLACE TEMP TABLE merged_latest AS SELECT * FROM merged "
+                "QUALIFY row_number() OVER (PARTITION BY item_id ORDER BY checked_at DESC) = 1"
+            )
+            store.write_parquet(con, "merged_latest", path, order_by="item_id")
             result["file"] = path
         return result
     finally:

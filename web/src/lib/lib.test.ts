@@ -38,20 +38,20 @@ describe("Geld", () => {
   })
 
   it("kuerzt fuer die Achse auf die groesste Einheit", () => {
-    expect(moneyShort(24)).toBe("24k")
-    expect(moneyShort(2049)).toBe("20,49s")
-    expect(moneyShort(15_000)).toBe("1,5g")
+    expect(moneyShort(24)).toBe("24c")
+    expect(moneyShort(2049)).toBe("20.49s")
+    expect(moneyShort(15_000)).toBe("1.5g")
   })
 
   it("schreibt Prozente mit Vorzeichen", () => {
-    expect(formatPercent(60)).toBe("+60 %")
-    expect(formatPercent(-94.3)).toBe("-94,3 %")
-    expect(formatPercent(0)).toBe("0 %")
+    expect(formatPercent(60)).toBe("+60%")
+    expect(formatPercent(-94.3)).toBe("-94.3%")
+    expect(formatPercent(0)).toBe("0%")
   })
 
   it("benennt die Art", () => {
-    expect(kindLabel("commodity")).toBe("Stapelware")
-    expect(kindLabel("auction")).toBe("Einzelstück")
+    expect(kindLabel("commodity")).toBe("Commodity")
+    expect(kindLabel("auction")).toBe("Single item")
   })
 })
 

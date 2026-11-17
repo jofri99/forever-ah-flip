@@ -8,7 +8,7 @@ import {
 } from "lightweight-charts"
 import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts"
 
-import { moneyShort, toLocalChartTime } from "@/lib/format"
+import { LOCALE, moneyShort, toLocalChartTime } from "@/lib/format"
 import type { SeriesPoint } from "@/lib/types"
 
 let probe: CanvasRenderingContext2D | null = null
@@ -68,7 +68,7 @@ export function PriceChart({ series }: { series: SeriesPoint[] }) {
     const chart = createChart(container, {
       autoSize: true,
       ...themeOptions(),
-      localization: { locale: "de-DE" },
+      localization: { locale: LOCALE },
       crosshair: { mode: CrosshairMode.Normal },
     })
     const min = chart.addSeries(LineSeries, {

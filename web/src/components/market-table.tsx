@@ -37,19 +37,19 @@ const COLUMNS: Column[] = [
         <span className="truncate">{itemName(row.item_id, names)}</span>
         {row.kind === "commodity" && (
           <Badge variant="outline" className="shrink-0 text-muted-foreground">
-            Stapel
+            Commodity
           </Badge>
         )}
       </span>
     ),
   },
-  { key: "min_price", label: "Günstigster", numeric: true, width: 140, cell: (row) => <Money value={row.min_price} /> },
+  { key: "min_price", label: "Lowest", numeric: true, width: 140, cell: (row) => <Money value={row.min_price} /> },
   { key: "median_price", label: "Median", numeric: true, width: 140, cell: (row) => <Money value={row.median_price} /> },
-  { key: "n_listings", label: "Angebote", numeric: true, width: 110, cell: (row) => <Count value={row.n_listings} /> },
-  { key: "quantity", label: "Menge", numeric: true, width: 110, cell: (row) => <Count value={row.quantity} /> },
-  { key: "change_24h_pct", label: "24 h", numeric: true, width: 110, cell: (row) => <Change value={row.change_24h_pct} /> },
-  { key: "qty_sold_24h", label: "Verkauft 24 h", numeric: true, width: 130, cell: (row) => <Count value={row.qty_sold_24h} /> },
-  { key: "value_sold_24h", label: "Umsatz 24 h", numeric: true, width: 150, cell: (row) => <Money value={row.value_sold_24h} /> },
+  { key: "n_listings", label: "Listings", numeric: true, width: 110, cell: (row) => <Count value={row.n_listings} /> },
+  { key: "quantity", label: "Quantity", numeric: true, width: 110, cell: (row) => <Count value={row.quantity} /> },
+  { key: "change_24h_pct", label: "24h", numeric: true, width: 110, cell: (row) => <Change value={row.change_24h_pct} /> },
+  { key: "qty_sold_24h", label: "Sold 24h", numeric: true, width: 130, cell: (row) => <Count value={row.qty_sold_24h} /> },
+  { key: "value_sold_24h", label: "Value 24h", numeric: true, width: 150, cell: (row) => <Money value={row.value_sold_24h} /> },
 ]
 
 interface MarketTableProps {
@@ -156,7 +156,7 @@ export function MarketTable({ rows, names, sort, selectedKey, onSort, onSelect }
         </TableBody>
       </table>
       {rows.length === 0 && (
-        <p className="p-6 text-center text-sm text-muted-foreground">Kein Item passt zur Suche.</p>
+        <p className="p-6 text-center text-sm text-muted-foreground">No item matches the search.</p>
       )}
     </div>
   )

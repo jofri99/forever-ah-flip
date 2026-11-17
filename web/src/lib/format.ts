@@ -1,6 +1,7 @@
 import type { Kind } from "./types"
 
-const LOCALE = "de-DE"
+// Englische Schreibweise, aber 24-Stunden-Zeit und Tag vor Monat.
+export const LOCALE = "en-GB"
 
 export interface Coins {
   gold: number
@@ -18,14 +19,14 @@ export function splitCoins(copper: number): Coins {
   }
 }
 
-/** Kurzform fuer die Achse des Diagramms: "20,49s", "1,5g", "24k". */
+/** Kurzform fuer die Achse des Diagramms: "20.49s", "1.5g", "24c". */
 export function moneyShort(copper: number): string {
   const total = Math.round(copper)
   const compact = (value: number) =>
     value.toLocaleString(LOCALE, { maximumFractionDigits: 2 })
   if (Math.abs(total) >= 10_000) return `${compact(total / 10_000)}g`
   if (Math.abs(total) >= 100) return `${compact(total / 100)}s`
-  return `${total}k`
+  return `${total}c`
 }
 
 export function formatInt(value: number): string {
@@ -34,7 +35,7 @@ export function formatInt(value: number): string {
 
 export function formatPercent(value: number): string {
   const sign = value > 0 ? "+" : ""
-  return `${sign}${value.toLocaleString(LOCALE, { maximumFractionDigits: 1 })} %`
+  return `${sign}${value.toLocaleString(LOCALE, { maximumFractionDigits: 1 })}%`
 }
 
 export function formatDateTime(iso: string): string {
@@ -45,7 +46,7 @@ export function formatDateTime(iso: string): string {
 }
 
 export function kindLabel(kind: Kind): string {
-  return kind === "commodity" ? "Stapelware" : "Einzelstück"
+  return kind === "commodity" ? "Commodity" : "Single item"
 }
 
 /**

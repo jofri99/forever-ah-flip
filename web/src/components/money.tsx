@@ -10,7 +10,7 @@ export function Money({ value }: { value: number | null | undefined }) {
     <span className="tabular-nums">
       {gold > 0 && <span className="text-coin-gold">{formatInt(gold)}g </span>}
       {(gold > 0 || silver > 0) && <span className="text-coin-silver">{silver}s </span>}
-      <span className="text-coin-copper">{copper}k</span>
+      <span className="text-coin-copper">{copper}c</span>
     </span>
   )
 }
