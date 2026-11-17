@@ -15,7 +15,11 @@ Eine Datei je Stand, einmal geschrieben und nie wieder angefasst. Zeiten sind UT
 items/house=114/dt=2026-11-17/081855.parquet   je Item eine Zeile
 sales/house=114/dt=2026-11-17/081855.parquet   Vergleich mit dem Stand davor
 runs/house=114/dt=2026-11-17/081855.parquet    eine Zeile Protokoll
+latest/house=114.json                          Zeiger auf den juengsten Stand
 ```
+
+`latest/house=114.json` ist die einzige Datei, die ueberschrieben wird. Wer die Daten per
+HTTPS liest statt per Git, findet dort den Pfad der neuesten `items`-Datei.
 
 ### items
 
