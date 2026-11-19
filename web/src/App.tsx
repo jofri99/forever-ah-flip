@@ -112,6 +112,7 @@ export function App() {
   const [unlimitedOnly, setUnlimitedOnly] = useState(false)
   const [soldOnly, setSoldOnly] = useState(false)
   const [profitableOnly, setProfitableOnly] = useState(true)
+  const [noCooldown, setNoCooldown] = useState(false)
   const [selectedKey, select] = useHashSelection()
   const deferredQuery = useDeferredValue(query)
 
@@ -167,11 +168,18 @@ export function App() {
     if (!ready) return []
     const filtered = filterCrafts(
       ready.crafts,
-      { query: deferredQuery, profession: category, category: subcategory, profitableOnly, soldOnly },
+      {
+        query: deferredQuery,
+        profession: category,
+        category: subcategory,
+        profitableOnly,
+        soldOnly,
+        noCooldown,
+      },
       ready.names,
     )
     return sortCrafts(filtered, craftSort, ready.names)
-  }, [ready, deferredQuery, category, subcategory, profitableOnly, soldOnly, craftSort])
+  }, [ready, deferredQuery, category, subcategory, profitableOnly, soldOnly, noCooldown, craftSort])
 
   // Die Auswahl richtet sich nach der gezeigten Ansicht: Typ und Untertyp des Items,
   // bei den Rezepten Beruf und Gruppe.
@@ -290,7 +298,8 @@ export function App() {
               Buy the reagents, craft, sell on the auction house. Every reagent is priced at its
               cheapest current source, auction house or vendor. Profit is per craft, after the 5%
               auction house cut, against the lowest current listing. Recipes come from ForeverDB;
-              learning one costs extra and cooldowns are not considered.
+              learning one costs extra, and a recipe marked with a timer can only be crafted once
+              per cooldown.
             </p>
           )}
 
@@ -367,6 +376,12 @@ export function App() {
               <div className="flex items-center gap-2">
                 <Switch id="sold" checked={soldOnly} onCheckedChange={setSoldOnly} />
                 <Label htmlFor="sold">Sold in last 24h</Label>
+              </div>
+            )}
+            {showCrafts && (
+              <div className="flex items-center gap-2">
+                <Switch id="no-cooldown" checked={noCooldown} onCheckedChange={setNoCooldown} />
+                <Label htmlFor="no-cooldown">No cooldown</Label>
               </div>
             )}
             <span className="text-sm text-muted-foreground">

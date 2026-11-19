@@ -139,6 +139,11 @@ export function craftCategories(rows: Craft[], profession: string): Option[] {
   return tally(rows.filter((row) => row.profession === profession).map((row) => row.category))
 }
 
+/** Laesst sich das Rezept nur alle paar Stunden oder Tage wirken? */
+export function hasCooldown(row: Pick<Craft, "cooldown_seconds">): boolean {
+  return row.cooldown_seconds != null && row.cooldown_seconds > 0
+}
+
 export interface CraftFilter {
   query: string
   profession: string
@@ -147,6 +152,8 @@ export interface CraftFilter {
   profitableOnly: boolean
   /** Nur Rezepte, deren Ergebnis in den letzten 24 Stunden verkauft wurde. */
   soldOnly: boolean
+  /** Nur Rezepte, die sich beliebig oft wiederholen lassen. */
+  noCooldown: boolean
 }
 
 export function filterCrafts(rows: Craft[], filter: CraftFilter, names: Names): Craft[] {
@@ -156,6 +163,7 @@ export function filterCrafts(rows: Craft[], filter: CraftFilter, names: Names): 
     if (filter.category !== ALL && row.category !== filter.category) return false
     if (filter.profitableOnly && !(row.profit != null && row.profit > 0)) return false
     if (filter.soldOnly && !(row.qty_sold_24h != null && row.qty_sold_24h > 0)) return false
+    if (filter.noCooldown && hasCooldown(row)) return false
     if (!needle) return true
     return (
       String(row.item_id) === needle ||

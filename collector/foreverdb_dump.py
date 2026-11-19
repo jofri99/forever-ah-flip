@@ -339,14 +339,17 @@ def vendors_main(settings: Settings, max_requests: int | None = None) -> int:
 
 
 REFRESH_DIR = "refresh"
-# Was beim Auffrischen neu geholt und am Ende in einem Zug ausgetauscht wird.
-REFRESH_FILES = ("items.jsonl", "vendors.jsonl", VENDOR_DETAILS_FILE)
+# Die Listen, die beim Auffrischen neu geholt werden. Die Spell-Liste gehoert dazu,
+# weil an ihr die Abklingzeiten der Rezepte haengen.
+REFRESH_LISTS = ("items", "vendors", "spells")
+# Was am Ende in einem Zug ausgetauscht wird.
+REFRESH_FILES = (*(f"{name}.jsonl" for name in REFRESH_LISTS), VENDOR_DETAILS_FILE)
 
 
 def refresh(
     client: ForeverDBClient, directory: Path, max_requests: int | None = None
 ) -> dict[str, Any]:
-    """Zieht Item-Liste, Haendler und Sortimente neu ab, ohne die alten anzutasten.
+    """Zieht Item-Liste, Haendler, Spell-Liste und Sortimente neu ab, ohne die alten anzutasten.
 
     Geholt wird in einen eigenen Ordner. Erst wenn alles vollstaendig da ist,
     ersetzen die neuen Dateien die alten. Bis dahin - auch nach einem Abbruch -
@@ -361,7 +364,7 @@ def refresh(
     def remaining() -> int | None:
         return None if budget is None else max(budget - used, 0)
 
-    for name in ("items", "vendors"):
+    for name in REFRESH_LISTS:
         result = dump_list(client, name, staging, max_requests=remaining())
         used += result["requests"]
         steps.append({"step": name, "rows": result["rows"], "total": result["total"], "done": result["done"]})
@@ -387,7 +390,7 @@ def refresh(
     state = _load_state(directory)
     for file_name in REFRESH_FILES:
         os.replace(staging / file_name, directory / file_name)
-    for key in ("items", "vendors", DETAIL_KINDS["vendors"][2]):
+    for key in (*REFRESH_LISTS, DETAIL_KINDS["vendors"][2]):
         if key in fresh_state:
             state[key] = fresh_state[key]
         else:

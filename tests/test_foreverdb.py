@@ -310,7 +310,7 @@ def test_vendors_are_listed_then_fetched_with_the_alliance_last(tmp_path: Path, 
 
 
 class FakeWorld(FakeCatalog):
-    """Items und Haendler zusammen, mit einer Version: nach einem neuen Build heisst alles anders."""
+    """Items, Haendler und Spells zusammen, mit einer Version: nach einem neuen Build heisst alles anders."""
 
     def __init__(self, version: str = "v1") -> None:
         super().__init__(total=150)
@@ -326,6 +326,9 @@ class FakeWorld(FakeCatalog):
         if url.endswith("/vendors"):
             rows = [{"id": i, "name": f"Vendor {i}", "side": "Horde"} for i in (1, 2, 3)]
             return FakeResponse(200, {"data": rows, "meta": {"total": 3}})
+        if url.endswith("/spells"):
+            rows = [{"id": 17187, "name": f"Transmute {self.version}", "cooldownMs": 169200000}]
+            return FakeResponse(200, {"data": rows, "meta": {"total": 1}})
         vendor_id = int(url.rsplit("/", 1)[1])
         if vendor_id == self.fail_vendor:
             return FakeResponse(402)
@@ -366,6 +369,8 @@ def test_refresh_keeps_the_old_files_until_everything_is_there(tmp_path: Path) -
     assert [c["url"].rsplit("/", 1)[1] for c in new.calls] == ["3"]
     assert names_in(tmp_path / "items.jsonl")[0] == "Item 1 v2"
     assert names_in(tmp_path / foreverdb_dump.VENDOR_DETAILS_FILE) == ["Vendor 1 v2", "Vendor 2 v2", "Vendor 3 v2"]
+    # Die Spell-Liste kommt mit: an ihr haengen die Abklingzeiten der Rezepte.
+    assert names_in(tmp_path / "spells.jsonl") == ["Transmute v2"]
     assert not (tmp_path / foreverdb_dump.REFRESH_DIR).exists()
     # Die Listen gelten als fertig: ein normaler Abzug holt nichts erneut.
     new.calls.clear()
@@ -380,7 +385,8 @@ def test_refresh_does_not_touch_the_item_details(tmp_path: Path) -> None:
 
     assert result["complete"] is True
     assert foreverdb_dump.details_done(tmp_path, "items") == {7}
-    assert result["requests"] == 2 + 1 + 3        # zwei Seiten Items, eine Seite Haendler, drei Sortimente
+    # zwei Seiten Items, eine Seite Haendler, eine Seite Spells, drei Sortimente
+    assert result["requests"] == 2 + 1 + 1 + 3
 
 
 class FakeProfessions(FakeCatalog):

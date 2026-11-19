@@ -1,4 +1,4 @@
-import { Profit } from "@/components/craft-table"
+import { Cooldown, Profit } from "@/components/craft-table"
 import { Count, Money } from "@/components/money"
 import { Badge } from "@/components/ui/badge"
 import {
@@ -81,6 +81,7 @@ export function CraftBreakdown({ craft, reagents, names, marketKey, onSelect }: 
           {craft.skill != null ? ` · ${craft.skill}` : ""}
         </Badge>
         {craft.new_in_forever && <Badge variant="outline">New in Forever</Badge>}
+        <Cooldown craft={craft} />
         <LearnedFrom craft={craft} />
       </div>
 

@@ -258,6 +258,10 @@ def test_crafts_exist_only_with_a_local_recipe_dump(warehouse: Settings, tmp_pat
         + recipe_line(3, "Unsold", 999, 1, '[{"itemId":300,"name":"Ore","count":1}]'),
         encoding="utf-8",
     )
+    # Das erste Rezept hat eine Abklingzeit von zwei Tagen.
+    (directory / "spells.jsonl").write_text(
+        '{"id":1,"name":"Big Bar","cooldownMs":172800000,"castTimeMs":25000}\n', encoding="utf-8"
+    )
     meta = publish.build(warehouse, out_dir=out)
     assert meta["crafts"] == 2
 
@@ -274,6 +278,11 @@ def test_crafts_exist_only_with_a_local_recipe_dump(warehouse: Settings, tmp_pat
     ]
     # In der Datei steht das lohnendste Rezept zuerst.
     assert query(out / publish.CRAFTS, "SELECT recipe_id FROM FILE") == [(1,), (2,)]
+    # Die Abklingzeit kommt aus der Spell-Liste; wo die nichts sagt, bleibt sie leer.
+    assert query(out / publish.CRAFTS, "SELECT recipe_id, cooldown_seconds, cast_seconds FROM FILE") == [
+        (1, 172800, 25.0),
+        (2, None, None),
+    ]
 
     assert query(
         out / publish.CRAFT_REAGENTS,

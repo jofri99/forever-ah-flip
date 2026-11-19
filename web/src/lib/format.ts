@@ -45,6 +45,14 @@ export function formatDateTime(iso: string): string {
   })
 }
 
+/** Eine Dauer in der groessten passenden Einheit: "45s", "10m", "47h", "4d". */
+export function formatDuration(seconds: number): string {
+  if (seconds >= 2 * 86_400) return `${Math.round(seconds / 86_400)}d`
+  if (seconds >= 3_600) return `${Math.round(seconds / 3_600)}h`
+  if (seconds >= 60) return `${Math.round(seconds / 60)}m`
+  return `${Math.round(seconds)}s`
+}
+
 export function kindLabel(kind: Kind): string {
   return kind === "commodity" ? "Commodity" : "Single item"
 }

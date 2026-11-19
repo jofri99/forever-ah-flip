@@ -269,6 +269,7 @@ def _build_crafts(con: duckdb.DuckDBPyConnection, settings: Settings) -> int | N
         return None
     table = "CREATE OR REPLACE TEMP TABLE"
     con.execute(f"{table} foreverdb_recipes AS {source}")
+    con.execute(f"{table} spell_timing AS {crafting.spell_timing_source(settings)}")
     con.execute(
         f"""
         {table} ah_prices AS
@@ -297,7 +298,8 @@ def _build_crafts(con: duckdb.DuckDBPyConnection, settings: Settings) -> int | N
                sales_hours_24h::FLOAT AS sales_hours_24h,
                learned, trainer_cost::DOUBLE AS trainer_cost, recipe_item_id::INTEGER AS recipe_item_id,
                recipe_price::DOUBLE AS recipe_price, recipe_source,
-               item_class, item_subclass, new_in_forever
+               item_class, item_subclass, new_in_forever,
+               cooldown_seconds::INTEGER AS cooldown_seconds, cast_seconds::DOUBLE AS cast_seconds
         FROM crafts
         WHERE ah_price IS NOT NULL;
 

@@ -1,12 +1,30 @@
 import { useMemo } from "react"
+import { Timer } from "lucide-react"
 
 import { Count, Money } from "@/components/money"
 import { Badge } from "@/components/ui/badge"
 import { VirtualTable } from "@/components/virtual-table"
 import type { Column } from "@/components/virtual-table"
-import { formatInt } from "@/lib/format"
-import { craftName, rowKey } from "@/lib/rows"
+import { formatDuration, formatInt } from "@/lib/format"
+import { craftName, hasCooldown, rowKey } from "@/lib/rows"
 import type { Craft, CraftSortKey, Names, Sort } from "@/lib/types"
+
+/** Kennzeichnet ein Rezept, das sich nur alle paar Stunden oder Tage wirken laesst. */
+export function Cooldown({ craft }: { craft: Pick<Craft, "cooldown_seconds"> }) {
+  if (!hasCooldown(craft) || craft.cooldown_seconds == null) return null
+  const duration = formatDuration(craft.cooldown_seconds)
+  return (
+    <Badge
+      variant="outline"
+      className="shrink-0 gap-1 text-muted-foreground"
+      title={`Cooldown ${duration}: one craft, then wait`}
+    >
+      <Timer className="size-3" aria-hidden />
+      <span className="sr-only">Cooldown </span>
+      {duration}
+    </Badge>
+  )
+}
 
 /** Vorzeichen als Farbe: Gewinn gruen, Verlust rot. */
 export function Profit({ value }: { value: number | null }) {
@@ -43,6 +61,7 @@ export function CraftTable({ rows, names, sort, selectedKey, onSort, onSelect }:
                 ×{formatInt(row.item_count)}
               </Badge>
             )}
+            <Cooldown craft={row} />
           </span>
         ),
       },

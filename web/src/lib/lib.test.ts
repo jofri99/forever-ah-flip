@@ -2,7 +2,7 @@ import type { FileMetaData } from "hyparquet"
 import { describe, expect, it } from "vitest"
 
 import { buildGroupIndex, spansFor } from "./data"
-import { formatPercent, kindLabel, moneyShort, splitCoins } from "./format"
+import { formatDuration, formatPercent, kindLabel, moneyShort, splitCoins } from "./format"
 import {
   ALL,
   categories,
@@ -13,6 +13,7 @@ import {
   filterFlips,
   filterRows,
   groupReagents,
+  hasCooldown,
   itemName,
   nextSort,
   professions,
@@ -233,6 +234,8 @@ describe("Rezepte", () => {
     item_class: "Consumable",
     item_subclass: "Potion",
     new_in_forever: false,
+    cooldown_seconds: null,
+    cast_seconds: null,
     ...partial,
   })
   const crafts = [
@@ -244,7 +247,14 @@ describe("Rezepte", () => {
     // Ein zweites Rezept fuer dasselbe Item wie das erste, aber lohnender.
     craft({ recipe_id: 5, item_id: 10, profit: 700, profession: "Cooking", category: null }),
   ]
-  const everything = { query: "", profession: ALL, category: ALL, profitableOnly: false, soldOnly: false }
+  const everything = {
+    query: "",
+    profession: ALL,
+    category: ALL,
+    profitableOnly: false,
+    soldOnly: false,
+    noCooldown: false,
+  }
   const ids = (rows: Craft[]) => rows.map((row) => row.recipe_id)
 
   it("nennt ein Rezept nach dem Item, das es herstellt", () => {
@@ -274,6 +284,23 @@ describe("Rezepte", () => {
     expect(ids(filterCrafts(crafts, { ...everything, profitableOnly: true }, {}))).toEqual([1, 4, 5])
     // 0 verkauft zaehlt nicht als verkauft.
     expect(ids(filterCrafts(crafts, { ...everything, soldOnly: true }, {}))).toEqual([1, 2])
+  })
+
+  it("blendet Rezepte mit Abklingzeit aus", () => {
+    const transmute = craft({ recipe_id: 9, item_id: 90, cooldown_seconds: 169_200 })
+    expect(hasCooldown(transmute)).toBe(true)
+    expect(hasCooldown(crafts[0])).toBe(false)
+    const rows = [...crafts, transmute]
+    expect(ids(filterCrafts(rows, everything, {}))).toContain(9)
+    expect(ids(filterCrafts(rows, { ...everything, noCooldown: true }, {}))).toEqual([1, 2, 3, 4, 5])
+  })
+
+  it("schreibt eine Dauer in der groessten passenden Einheit", () => {
+    expect(formatDuration(45)).toBe("45s")
+    expect(formatDuration(600)).toBe("10m")
+    // Eine Transmutation: 47 Stunden bleiben Stunden, vier Tage werden Tage.
+    expect(formatDuration(169_200)).toBe("47h")
+    expect(formatDuration(345_600)).toBe("4d")
   })
 
   it("findet ein Rezept ueber den Namen des Items, den eigenen Namen und die ID", () => {

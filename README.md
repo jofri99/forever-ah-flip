@@ -167,12 +167,13 @@ alle 2.735 Luecken dort vorhanden, ueberwiegend Ausruestung. Der Schluessel steh
 ```powershell
 python -m collector foreverdb                    # die Item-Liste, 238 Anfragen
 python -m collector foreverdb vendors quests     # weitere Listen
+python -m collector foreverdb spells             # alle Zauber: daran haengen die Abklingzeiten der Rezepte
 python -m collector foreverdb items --max-requests 50
 python -m collector foreverdb-details            # Details der Items, die Blizzard nicht kennt
 python -m collector foreverdb-details --scope market --max-requests 500
 python -m collector foreverdb-vendors            # alle Haendler samt Sortiment und Preisen
 python -m collector foreverdb-recipes            # alle Berufe mit Rezepten, Zutaten und Lernquellen
-python -m collector foreverdb-refresh            # Item-Liste, Haendler, Sortimente und Rezepte neu abziehen
+python -m collector foreverdb-refresh            # Items, Haendler, Sortimente, Zauber und Rezepte neu abziehen
 ```
 
 Abgelegt wird unter `data/local/foreverdb/`, eine Zeile JSON je Eintrag. Der Abzug haelt
@@ -190,13 +191,17 @@ Abbruch dort weiter. Gemessen an der API:
   die Skill-Stufen und wie man es lernt (Lehrer mit Preis, Rezept-Item, Haendler, Beute).
   `foreverdb-recipes` holt alle 2.493 Rezepte der 12 Berufe mit 33 Anfragen nach
   `recipes.jsonl` und schreibt erst, wenn alles da ist.
+- Ein Rezept ist ein Zauber, und nur an dem steht, wie oft er sich wirken laesst und wie
+  lange er dauert. Die Spell-Liste nennt beides schon in der Uebersicht (`cooldownMs`,
+  `castTimeMs`): 32.131 Zauber, 322 Anfragen, eine Viertelstunde - und damit die
+  Abklingzeit jedes Rezepts, ohne einen einzigen Zauber einzeln abzurufen.
 - Erlaubt sind 30 Anfragen je Minute und 5.000 am Tag.
 
-Nach einem neuen Spielstand aendern sich Items, Sortimente und Rezepte. `foreverdb-refresh`
-holt Item-Liste, Haendler und Sortimente neu - in einen eigenen Ordner, und tauscht erst aus,
-wenn alles vollstaendig da ist. Bis dahin, auch nach einem Abbruch, arbeiten Datenbank und
-Oberflaeche mit dem bisherigen Stand; ein erneuter Aufruf setzt fort. Danach folgen die
-Rezepte. Rund 1.350 Anfragen, knapp 50 Minuten.
+Nach einem neuen Spielstand aendern sich Items, Sortimente, Zauber und Rezepte.
+`foreverdb-refresh` holt Item-Liste, Haendler, Spell-Liste und Sortimente neu - in einen
+eigenen Ordner, und tauscht erst aus, wenn alles vollstaendig da ist. Bis dahin, auch nach
+einem Abbruch, arbeiten Datenbank und Oberflaeche mit dem bisherigen Stand; ein erneuter
+Aufruf setzt fort. Danach folgen die Rezepte. Rund 1.700 Anfragen, gut eine Stunde.
 
 Drei Regeln des Anbieters bestimmen, wohin diese Daten duerfen:
 
@@ -244,7 +249,7 @@ items ─┬─< vendor_stock >── vendors
 | `vendors` | `vendor_id` | ein Haendler: Fraktion, Zone, Koordinaten |
 | `vendor_stock` | `vendor_id`, `item_id` | was ein Haendler verkauft: Preis, Stapel, begrenzter Bestand |
 | `vendor_prices` | `item_id` | je Item der guenstigste Haendler, den die Horde erreicht und der unbegrenzt liefert |
-| `recipes` | `recipe_id` | ein Rezept: Beruf, Gruppe, Skill, hergestelltes Item und Menge, Lernquelle (`learned`: `trainer`, `recipe`, `automatic`), Preis beim Lehrer |
+| `recipes` | `recipe_id` | ein Rezept: Beruf, Gruppe, Skill, hergestelltes Item und Menge, Lernquelle (`learned`: `trainer`, `recipe`, `automatic`), Preis beim Lehrer, Abklingzeit und Dauer eines Durchgangs |
 | `recipe_reagents` | `recipe_id`, `item_id` | die Zutaten mit Menge |
 | `recipe_items` | `recipe_id`, `item_id` | die Items, die ein Rezept lehren |
 
@@ -320,9 +325,14 @@ Auktionshaus oder einem Haendler mit unbegrenztem Bestand, je nachdem, was wenig
 Hat eine Zutat gerade keinen Preis, bleiben `cost` und `profit` leer; `cost_known` nennt
 die Summe der uebrigen und `unpriced` ihre Zahl. `profit` gilt fuer einen Durchgang, also
 fuer `item_count` Stueck. Nicht eingerechnet sind das einmalige Lernen des Rezepts, die
-Einstellgebuehr, Abklingzeiten und die Frage, ob eine Zutat sich guenstiger selbst
-herstellen liesse. Und wie bei den Haendler-Flips: gerechnet wird gegen das guenstigste
-Angebot, nicht gegen einen Preis, zu dem sicher verkauft wird.
+Einstellgebuehr und die Frage, ob eine Zutat sich guenstiger selbst herstellen liesse. Und
+wie bei den Haendler-Flips: gerechnet wird gegen das guenstigste Angebot, nicht gegen einen
+Preis, zu dem sicher verkauft wird.
+
+`cooldown_seconds` nennt die Abklingzeit eines Rezepts. Eine Transmutation etwa bringt
+ihren Gewinn einmal in 47 Stunden, waehrend sich ein Trank beliebig oft brauen laesst - der
+Gewinn je Durchgang ist bei beiden derselbe Wert, vergleichbar ist er nicht. Wer nur
+Wiederholbares sehen will, filtert mit `WHERE cooldown_seconds IS NULL`.
 
 Die Datei laesst sich auch mit DBeaver, der DuckDB-Kommandozeile oder einer
 DuckDB-Erweiterung fuer VS Code oeffnen. DuckDB erlaubt dabei nur ein Programm, das schreibt:
@@ -385,8 +395,9 @@ npm run dev                         # http://localhost:5173
   Haendler von ForeverDB vorliegt - auf einer oeffentlichen Seite also nicht.
 - Der Reiter **Crafting** zeigt, was sich herzustellen lohnt: Kosten der Zutaten,
   guenstigstes Angebot des Ergebnisses, Gewinn je Durchgang nach 5 % Gebuehr, Angebote und
-  Verkaeufe. Filtern laesst sich nach Beruf und dessen Gruppen; zwei Schalter beschraenken
-  auf lohnende Rezepte und auf solche mit Verkaeufen. Auch diesen Reiter gibt es nur mit
+  Verkaeufe. Filtern laesst sich nach Beruf und dessen Gruppen; drei Schalter beschraenken
+  auf lohnende Rezepte, auf solche mit Verkaeufen und auf solche ohne Abklingzeit. Ein
+  Rezept mit Abklingzeit traegt eine Uhr mit der Dauer. Auch diesen Reiter gibt es nur mit
   lokalem Abzug von ForeverDB.
 - Ein Klick oder Enter auf einer Zeile oeffnet den Verlauf: guenstigster Preis, Median und
   darunter die verkaufte Menge je Stand - oder die Zahl der Angebote, solange es keine

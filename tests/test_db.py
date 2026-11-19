@@ -106,6 +106,7 @@ def test_build_creates_tables_and_views_over_every_dataset(filled: Settings) -> 
         "sales": 1,
         "snapshots": 4,
         "sold_daily": 1,
+        "spell_timing": 0,
         "vendor_flips": 0,
         "vendor_items": 0,
         "vendor_prices": 0,
@@ -414,6 +415,15 @@ def test_crafts_price_every_reagent_at_the_cheaper_source(filled: Settings) -> N
         ).replace('"profession":"blacksmithing","professionName":"Blacksmithing"', '"profession":"enchanting","professionName":"Enchanting"'),
         encoding="utf-8",
     )
+    # Aus der Spell-Liste: das Schwert laesst sich nur alle zwei Tage schmieden und braucht
+    # 25 Sekunden. Der Zauber steht doppelt in der Liste; ein dritter gehoert zu keinem Rezept.
+    (directory / "spells.jsonl").write_text(
+        '{"id":1,"name":"Destiny","cooldownMs":172800000,"castTimeMs":25000}\n'
+        '{"id":1,"name":"Destiny","cooldownMs":172800000,"castTimeMs":25000}\n'
+        '{"id":2,"name":"Weave Linen","cooldownMs":null,"castTimeMs":3000}\n'
+        '{"id":77,"name":"Fireball","cooldownMs":8000,"castTimeMs":3500}\n',
+        encoding="utf-8",
+    )
     result = db.build(filled)
     # Faden, Vorlage und die Zutat ohne Preis stehen in keiner Item-Liste. Das darf sein
     # und wird gezaehlt, statt den Bau scheitern zu lassen.
@@ -471,3 +481,9 @@ def test_crafts_price_every_reagent_at_the_cheaper_source(filled: Settings) -> N
     assert crafts[2] == (1, 1, 0.0, None, 24, None, None, 150.0, "vendor")
     # Die Verzauberung hat Kosten, aber nichts zu verkaufen.
     assert crafts[3] == (1, 0, 72.0, 72.0, None, None, None, None, None)
+
+    # Abklingzeit und Dauer stehen am Rezept und gehen in die Rechnung mit.
+    timing = "SELECT recipe_id, cooldown_seconds, cast_seconds FROM {} ORDER BY recipe_id"
+    expected = [(1, 172800, 25.0), (2, None, 3.0), (3, None, None)]
+    assert rows(filled, timing.format("recipes")) == expected
+    assert rows(filled, timing.format("crafts")) == expected

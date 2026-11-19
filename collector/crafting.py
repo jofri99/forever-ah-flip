@@ -15,9 +15,11 @@ Die ersten vier sind Stammdaten, die letzten drei haengen am stuendlichen Preis.
 Dieselben Abfragen gelten an zwei Stellen. Die lokale Datenbank legt die
 Stammdaten in feste Tabellen (schema.py) und die Rechnung als Sichten darueber.
 Beim Bauen der Anzeige-Dateien entsteht beides als Tabellen fuer diesen einen
-Lauf. Wer rechnen will, stellt zwei Dinge bereit:
+Lauf. Wer rechnen will, stellt drei Dinge bereit:
 
     foreverdb_recipes  die Rezepte, wie `recipes_source` sie liest
+    spell_timing       Abklingzeit und Zauberzeit je Zauber, wie
+                       `spell_timing_source` sie liest
     ah_prices          je Item das guenstigste Angebot im Auktionshaus:
                        item_id, kind, ah_price, n_listings, qty_sold_24h,
                        sales_hours_24h, item_class, item_subclass
@@ -67,6 +69,25 @@ def recipes_source(settings: Settings) -> str | None:
     )
 
 
+def spell_timing_source(settings: Settings) -> str:
+    """Abklingzeit und Zauberzeit je Zauber aus der abgezogenen Spell-Liste.
+
+    Ein Rezept ist ein Zauber, und nur dort steht, wie oft er sich wirken laesst -
+    eine Transmutation etwa alle zwei Tage. Ohne die Liste ist die Abfrage leer,
+    und kein Rezept bekommt eine Abklingzeit.
+    """
+    target = foreverdb_dump.dump_dir(settings) / "spells.jsonl"
+    if not target.is_file() or target.stat().st_size == 0:
+        return "SELECT NULL::INTEGER AS spell_id, NULL::BIGINT AS cooldown_ms, NULL::BIGINT AS cast_ms WHERE false"
+    return (
+        "SELECT id AS spell_id, cooldownMs AS cooldown_ms, castTimeMs AS cast_ms "
+        f"FROM read_json('{store.sql_path(target)}', format = 'newline_delimited', "
+        "columns = {'id': 'INTEGER', 'cooldownMs': 'BIGINT', 'castTimeMs': 'BIGINT'}, ignore_errors = true) "
+        "WHERE id IS NOT NULL "
+        "QUALIFY row_number() OVER (PARTITION BY id ORDER BY cooldownMs DESC NULLS LAST) = 1"
+    )
+
+
 def vendor_prices_select(offers: str) -> str:
     """Je Item der guenstigste Haendler und wie viele es insgesamt fuehren.
 
@@ -112,8 +133,12 @@ SELECT r.spellId                                             AS recipe_id,
        r.learnedFrom.recipeItems[1].itemId                   AS recipe_item_id,
        r.learnedFrom.sources.ways                            AS ways,
        coalesce(r.newInForever, false)                       AS new_in_forever,
+       -- Wie oft sich das Rezept wirken laesst und wie lange ein Durchgang dauert.
+       CASE WHEN t.cooldown_ms > 0 THEN (t.cooldown_ms / 1000)::INTEGER END AS cooldown_seconds,
+       CASE WHEN t.cast_ms > 0 THEN t.cast_ms / 1000.0 END   AS cast_seconds,
        r.url
-FROM foreverdb_recipes r"""
+FROM foreverdb_recipes r
+LEFT JOIN spell_timing t ON t.spell_id = r.spellId"""
 
 # Die Zutaten: eine Zeile je Rezept und Item. Nennt ein Rezept dasselbe Item
 # zweimal, zaehlen die Mengen zusammen.
@@ -131,7 +156,7 @@ FROM foreverdb_recipes r, unnest(r.learnedFrom.recipeItems) AS t(i)
 WHERE i.itemId IS NOT NULL
 GROUP BY r.spellId, i.itemId"""
 
-# Tabelle -> Abfrage, die sie aus `foreverdb_recipes` fuellt.
+# Tabelle -> Abfrage, die sie aus `foreverdb_recipes` und `spell_timing` fuellt.
 MODEL: dict[str, str] = {
     "recipes": RECIPES_SELECT,
     "recipe_reagents": REAGENTS_SELECT,
@@ -215,7 +240,8 @@ SELECT r.recipe_id, r.name, r.profession, r.category, r.skill,
        r.learned, r.trainer_cost, r.recipe_item_id,
        rp.buy_price                                                    AS recipe_price,
        rp.buy_source                                                   AS recipe_source,
-       a.item_class, a.item_subclass, r.new_in_forever
+       a.item_class, a.item_subclass, r.new_in_forever,
+       r.cooldown_seconds, r.cast_seconds
 FROM recipes r
 JOIN cost c USING (recipe_id)
 LEFT JOIN ah_prices a ON a.item_id = r.item_id

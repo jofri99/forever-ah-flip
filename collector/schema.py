@@ -105,6 +105,8 @@ TABLES: dict[str, str] = {
             recipe_item_id  INTEGER,          -- das erste Item, das es lehrt; alle stehen in recipe_items
             ways            VARCHAR[],        -- trainer, vendor, drop, quest, auto
             new_in_forever  BOOLEAN NOT NULL,
+            cooldown_seconds INTEGER,         -- so lange sperrt ein Durchgang den naechsten; fehlt ohne Abklingzeit
+            cast_seconds    DOUBLE,           -- so lange dauert ein Durchgang
             url             VARCHAR
         )
     """,

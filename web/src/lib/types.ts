@@ -156,6 +156,10 @@ export interface Craft {
   item_class: string | null
   item_subclass: string | null
   new_in_forever: boolean
+  /** So lange sperrt ein Durchgang den naechsten, in Sekunden. Fehlt ohne Abklingzeit. */
+  cooldown_seconds: number | null
+  /** So lange dauert ein Durchgang, in Sekunden. */
+  cast_seconds: number | null
 }
 
 /** Eine Zeile aus craft_reagents.parquet: eine Zutat eines Rezepts mit ihrem Preis. */

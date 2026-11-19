@@ -200,6 +200,8 @@ def _foreverdb_views(con: duckdb.DuckDBPyConnection, settings: Settings) -> list
         created.append("foreverdb_recipes")
     else:
         _empty_view(con, "foreverdb_recipes", crafting.RECIPE_COLUMNS)
+    # Abklingzeit und Zauberzeit aus der Spell-Liste - leer, solange es die nicht gibt.
+    con.execute(f"CREATE OR REPLACE VIEW spell_timing AS {crafting.spell_timing_source(settings)}")
     return created
 
 
