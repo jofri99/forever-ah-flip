@@ -2,6 +2,7 @@ import { useEffect, useState } from "react"
 import type { ReactNode } from "react"
 import { ExternalLink, X } from "lucide-react"
 
+import { CraftBreakdown } from "@/components/craft-breakdown"
 import { Change, Count, Money } from "@/components/money"
 import { PriceChart } from "@/components/price-chart"
 import { Badge } from "@/components/ui/badge"
@@ -11,7 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { loadSeries } from "@/lib/data"
 import { kindLabel } from "@/lib/format"
 import { itemName } from "@/lib/rows"
-import type { MarketRow, Meta, Names, SeriesPoint } from "@/lib/types"
+import type { Craft, CraftReagent, MarketRow, Meta, Names, SeriesPoint } from "@/lib/types"
 
 function Tile({ label, children, note }: { label: string; children: ReactNode; note?: ReactNode }) {
   return (
@@ -41,6 +42,13 @@ interface ItemDetailProps {
   meta: Meta
   row: MarketRow
   names: Names
+  /** Die Rezepte, die dieses Item herstellen, das lohnendste zuerst. Meist keins oder eins. */
+  crafts: Craft[]
+  /** Die Zutaten je Rezept. */
+  reagents: Map<number, CraftReagent[]>
+  /** Der Schluessel der Marktzeile eines Items, wenn es im Auktionshaus steht. */
+  marketKey: (itemId: number) => string | null
+  onSelect: (key: string) => void
   onClose: () => void
 }
 
@@ -48,7 +56,16 @@ interface ItemDetailProps {
  * Wird je Item neu eingehaengt (key in App.tsx). Darum beginnt der Zustand immer
  * bei "loading" und muss beim Wechsel nicht von Hand zurueckgesetzt werden.
  */
-export function ItemDetail({ meta, row, names, onClose }: ItemDetailProps) {
+export function ItemDetail({
+  meta,
+  row,
+  names,
+  crafts,
+  reagents,
+  marketKey,
+  onSelect,
+  onClose,
+}: ItemDetailProps) {
   const [loaded, setLoaded] = useState<Loaded>({ state: "loading" })
 
   useEffect(() => {
@@ -165,6 +182,24 @@ export function ItemDetail({ meta, row, names, onClose }: ItemDetailProps) {
             {!hasSales &&
               "Sales figures appear once two consecutive snapshots have been compared."}
           </p>
+        )}
+
+        {crafts.length > 0 && (
+          <section className="flex flex-col gap-2">
+            <h3 className="text-sm font-medium">
+              Crafting <span className="font-normal text-muted-foreground">· reagents at their cheapest current price</span>
+            </h3>
+            {crafts.map((craft) => (
+              <CraftBreakdown
+                key={craft.recipe_id}
+                craft={craft}
+                reagents={reagents.get(craft.recipe_id) ?? []}
+                names={names}
+                marketKey={marketKey}
+                onSelect={onSelect}
+              />
+            ))}
+          </section>
         )}
       </CardContent>
     </Card>

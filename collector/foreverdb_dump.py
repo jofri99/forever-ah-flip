@@ -4,6 +4,7 @@ Abgelegt wird unter data/local/foreverdb/, eine Zeile JSON je Eintrag:
 
     items.jsonl      alle Items mit Name, Qualitaet, Klasse, Icon
     vendors.jsonl    alle Haendler
+    recipes.jsonl    alle Rezepte der Berufe mit Zutaten und Lernquelle
     ...
     state.json       wie weit jede Liste ist
 
@@ -404,6 +405,11 @@ def refresh_main(settings: Settings, max_requests: int | None = None) -> int:
     directory = dump_dir(settings)
     with ForeverDBClient(settings.foreverdb_key) as client:
         result = refresh(client, directory, max_requests=max_requests)
+        recipes = None
+        if result["complete"]:
+            # Ein neuer Spielstand aendert auch Rezepte. Die kosten nur gut 30 Anfragen.
+            left = None if max_requests is None else max(max_requests - result["requests"], 0)
+            recipes = dump_recipes(client, directory, max_requests=left)
     for step in result["steps"]:
         status = "fertig" if step["done"] else "offen"
         print(f"  {step['step']:<15} {step['rows']:>6} von {step['total']} - {status}")
@@ -414,6 +420,113 @@ def refresh_main(settings: Settings, max_requests: int | None = None) -> int:
             f"Noch nicht vollstaendig ({result['stopped']}). Die bisherigen Dateien gelten weiter; "
             "ein erneuter Aufruf setzt fort."
         )
+    if recipes is not None:
+        _print_recipes(recipes)
+    return 0
+
+
+PROFESSIONS_FILE = "professions.jsonl"
+RECIPES_FILE = "recipes.jsonl"
+
+
+def _write_jsonl(path: Path, rows: list[dict[str, Any]]) -> None:
+    """Erst daneben schreiben, dann umbenennen - nie liegt eine halbe Datei."""
+    temporary = path.with_name(path.name + ".tmp")
+    with open(temporary, "w", encoding="utf-8") as handle:
+        for row in rows:
+            handle.write(json.dumps(row, ensure_ascii=False, separators=(",", ":")) + "\n")
+    os.replace(temporary, path)
+
+
+def dump_recipes(
+    client: ForeverDBClient, directory: Path, max_requests: int | None = None
+) -> dict[str, Any]:
+    """Zieht alle Berufe mit ihren Rezepten ab: Zutaten, Ergebnis, Lernquelle.
+
+    Das sind gut 30 Anfragen. Gesammelt wird im Speicher und erst geschrieben, wenn
+    alles da ist. Bricht der Lauf ab, bleiben die bisherigen Dateien, wie sie waren.
+
+        professions.jsonl  ein Beruf je Zeile: Raenge, Lehrer
+        recipes.jsonl      ein Rezept je Zeile, dazu der Beruf, zu dem es gehoert
+    """
+    professions: list[dict[str, Any]] = []
+    recipes: list[dict[str, Any]] = []
+    requests_made = 0
+
+    def result(stopped: str | None) -> dict[str, Any]:
+        return {
+            "complete": stopped is None,
+            "professions": len(professions),
+            "recipes": len(recipes),
+            "requests": requests_made,
+            "stopped": stopped,
+            "file": directory / RECIPES_FILE,
+        }
+
+    def fetch(path: str, params: dict[str, Any] | None = None) -> tuple[dict[str, Any], str | None]:
+        nonlocal requests_made
+        if max_requests is not None and requests_made >= max_requests:
+            return {}, "Grenze fuer diesen Lauf erreicht"
+        try:
+            response = client.get(path, params)
+        except ForeverDBQuotaError as exc:
+            return {}, str(exc)
+        requests_made += 1
+        if not response.ok:
+            return {}, f"HTTP {response.status} bei {path}"
+        return response.data or {}, None
+
+    payload, problem = fetch("/professions")
+    if problem:
+        return result(problem)
+
+    for entry in payload.get("data") or []:
+        slug = entry.get("slug")
+        if not slug:
+            continue
+        header = dict(entry)
+        offset = 0
+        total: int | None = None
+        while total is None or offset < total:
+            payload, problem = fetch(f"/professions/{slug}", {"limit": PAGE_SIZE, "offset": offset})
+            if problem:
+                return result(problem)
+            data = payload.get("data") or {}
+            total = (payload.get("meta") or {}).get("total", total)
+            if offset == 0:
+                # Raenge und Lehrer stehen auf jeder Seite; einmal genuegt.
+                header = {key: value for key, value in data.items() if key != "recipes"} or header
+            page = data.get("recipes") or []
+            if not page:
+                break
+            for recipe in page:
+                recipes.append({**recipe, "profession": slug, "professionName": header.get("name") or slug})
+            offset += len(page)
+        professions.append(header)
+
+    directory.mkdir(parents=True, exist_ok=True)
+    _write_jsonl(directory / PROFESSIONS_FILE, professions)
+    _write_jsonl(directory / RECIPES_FILE, recipes)
+    return result(None)
+
+
+def _print_recipes(result: dict[str, Any]) -> None:
+    if result["complete"]:
+        print(
+            f"{result['recipes']} Rezepte aus {result['professions']} Berufen, "
+            f"{result['requests']} Anfragen, nach {result['file']}"
+        )
+    else:
+        print(
+            f"Rezepte nicht vollstaendig ({result['stopped']}) - nichts geschrieben, "
+            "die bisherigen Dateien gelten weiter."
+        )
+
+
+def recipes_main(settings: Settings, max_requests: int | None = None) -> int:
+    with ForeverDBClient(settings.foreverdb_key) as client:
+        result = dump_recipes(client, dump_dir(settings), max_requests=max_requests)
+    _print_recipes(result)
     return 0
 
 

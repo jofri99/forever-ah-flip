@@ -21,7 +21,7 @@ from typing import Any
 
 import duckdb
 
-from . import foreverdb_dump, names, store
+from . import crafting, foreverdb_dump, names, store
 from .config import Settings
 
 DB_NAME = "forever.duckdb"
@@ -183,6 +183,15 @@ def _foreverdb_views(con: duckdb.DuckDBPyConnection, settings: Settings) -> list
         created.append("foreverdb_vendor_details")
     else:
         _empty_view(con, "foreverdb_vendor_details", EMPTY["foreverdb_vendor_details"])
+
+    # Die Rezepte der Berufe, ebenfalls mit festen Spalten. Darauf baut das Modell
+    # fuers Herstellen auf (siehe crafting.py).
+    source = crafting.recipes_source(settings)
+    if source is not None:
+        con.execute(f"CREATE OR REPLACE VIEW foreverdb_recipes AS {source}")
+        created.append("foreverdb_recipes")
+    else:
+        _empty_view(con, "foreverdb_recipes", crafting.RECIPE_COLUMNS)
     return created
 
 
@@ -191,41 +200,21 @@ def vendor_details_source(settings: Settings) -> str | None:
     vendors = foreverdb_dump.dump_dir(settings) / foreverdb_dump.VENDOR_DETAILS_FILE
     if not vendors.is_file() or vendors.stat().st_size == 0:
         return None
-    columns = "{" + ", ".join(
-        f"'{part.split(' ', 1)[0]}': '{part.split(' ', 1)[1]}'"
-        for part in _split_columns(EMPTY["foreverdb_vendor_details"])
-    ) + "}"
+    columns = store.json_columns(EMPTY["foreverdb_vendor_details"])
     return (
         f"SELECT * FROM read_json('{store.sql_path(vendors)}', format = 'newline_delimited', "
         f"columns = {columns}, ignore_errors = true) WHERE id IS NOT NULL"
     )
 
 
-def _split_columns(definition: str) -> list[str]:
-    """Zerlegt "a INTEGER, b STRUCT(x INTEGER, y VARCHAR)" an den Kommas der obersten Ebene."""
-    parts, depth, current = [], 0, ""
-    for char in definition:
-        if char == "(":
-            depth += 1
-        elif char == ")":
-            depth -= 1
-        if char == "," and depth == 0:
-            parts.append(current.strip())
-            current = ""
-        else:
-            current += char
-    if current.strip():
-        parts.append(current.strip())
-    return parts
-
-
 DERIVED = """
--- Geldbetraege lesbar machen: money(123456) -> '12g 34s 56c'
+-- Geldbetraege lesbar machen: money(123456) -> '12g 34s 56c', money(-250) -> '-2s 50c'
 CREATE OR REPLACE MACRO money(copper) AS
     CASE WHEN copper IS NULL THEN NULL ELSE
-        CASE WHEN copper >= 10000 THEN (copper::BIGINT // 10000)::VARCHAR || 'g ' ELSE '' END ||
-        CASE WHEN copper >= 100 THEN ((copper::BIGINT % 10000) // 100)::VARCHAR || 's ' ELSE '' END ||
-        (copper::BIGINT % 100)::VARCHAR || 'c'
+        CASE WHEN copper < 0 THEN '-' ELSE '' END ||
+        CASE WHEN abs(copper) >= 10000 THEN (abs(copper)::BIGINT // 10000)::VARCHAR || 'g ' ELSE '' END ||
+        CASE WHEN abs(copper) >= 100 THEN ((abs(copper)::BIGINT % 10000) // 100)::VARCHAR || 's ' ELSE '' END ||
+        (abs(copper)::BIGINT % 100)::VARCHAR || 'c'
     END;
 
 CREATE OR REPLACE MACRO gold(copper) AS round(copper / 10000.0, 2);
@@ -340,7 +329,29 @@ JOIN cheapest c USING (item_id)
 JOIN items i USING (item_id)
 LEFT JOIN sold s USING (item_id)
 WHERE l.min_price * 0.95 > c.price_per_item;
+
+-- Je Item das guenstigste Angebot im Auktionshaus, mit den Verkaeufen der letzten
+-- 24 Stunden vor dem juengsten Stand.
+CREATE OR REPLACE VIEW ah_prices AS
+WITH sold AS (
+    SELECT item_id, kind, sum(qty_sold) AS qty_sold_24h, sum(gap_hours) AS sales_hours_24h
+    FROM sales
+    WHERE snapshot_ts > (SELECT max(snapshot_ts) FROM snapshots) - INTERVAL 24 HOUR
+    GROUP BY item_id, kind
+)
+SELECT l.item_id, l.kind, l.min_price AS ah_price, l.n_listings,
+       s.qty_sold_24h, s.sales_hours_24h, l.item_class, l.item_subclass
+FROM latest l
+LEFT JOIN sold s ON s.item_id = l.item_id AND s.kind = l.kind
+WHERE l.min_price > 0
+QUALIFY row_number() OVER (PARTITION BY l.item_id ORDER BY l.min_price, l.kind) = 1;
 """
+
+# Zum Herstellen taugt ein Haendler, den die Horde erreicht und der unbegrenzt liefert.
+CRAFT_VENDORS = (
+    "SELECT * FROM vendor_items "
+    "WHERE side <> 'Alliance' AND price_per_item > 0 AND NOT coalesce(limited, false)"
+)
 
 
 def build(settings: Settings) -> dict[str, Any]:
@@ -364,7 +375,13 @@ def build(settings: Settings) -> dict[str, Any]:
         present.setdefault("foreverdb_items", False)
         present.setdefault("foreverdb_item_details", False)
         present.setdefault("foreverdb_vendor_details", False)
+        present.setdefault("foreverdb_recipes", False)
         con.execute(DERIVED)
+        # Rezepte, Zutaten, Preise und die Rechnung dazu - dieselben Definitionen,
+        # mit denen auch die Anzeige-Dateien gebaut werden.
+        con.execute(crafting.vendor_prices_sql("CREATE OR REPLACE VIEW", CRAFT_VENDORS))
+        con.execute(crafting.model_sql("CREATE OR REPLACE VIEW"))
+        con.execute(crafting.costs_sql("CREATE OR REPLACE VIEW"))
 
         views = [
             row[0]

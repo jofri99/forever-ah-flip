@@ -6,16 +6,23 @@ import { formatPercent, kindLabel, moneyShort, splitCoins } from "./format"
 import {
   ALL,
   categories,
+  craftCategories,
+  craftName,
+  craftsByItem,
+  filterCrafts,
   filterFlips,
   filterRows,
+  groupReagents,
   itemName,
   nextSort,
+  professions,
   rowKey,
+  sortCrafts,
   sortFlips,
   sortRows,
   subcategories,
 } from "./rows"
-import type { MarketRow, VendorFlip } from "./types"
+import type { Craft, CraftReagent, MarketRow, VendorFlip } from "./types"
 
 function row(partial: Partial<MarketRow> & Pick<MarketRow, "item_id">): MarketRow {
   return {
@@ -197,6 +204,117 @@ describe("Haendler-Flips", () => {
     expect(filterRows(flips, "linen", "all", names).map((f) => f.item_id)).toEqual([3])
     expect(filterRows(flips, "", "all", names, "Recipe", "Alchemy")).toEqual([])
     expect(nextSort({ key: "profit", dir: -1 }, "vendor")).toEqual({ key: "vendor", dir: 1 })
+  })
+})
+
+describe("Rezepte", () => {
+  const craft = (partial: Partial<Craft> & Pick<Craft, "recipe_id" | "item_id">): Craft => ({
+    name: `Recipe ${partial.recipe_id}`,
+    profession: "Alchemy",
+    category: "Potions",
+    skill: 100,
+    kind: "commodity",
+    item_count: 1,
+    reagents: 2,
+    unpriced: 0,
+    cost_known: 100,
+    cost: 100,
+    ah_price: 200,
+    profit: 90,
+    profit_pct: 90,
+    n_listings: 1,
+    qty_sold_24h: null,
+    sales_hours_24h: null,
+    learned: "trainer",
+    trainer_cost: 500,
+    recipe_item_id: null,
+    recipe_price: null,
+    recipe_source: null,
+    item_class: "Consumable",
+    item_subclass: "Potion",
+    new_in_forever: false,
+    ...partial,
+  })
+  const crafts = [
+    craft({ recipe_id: 1, item_id: 10, profit: 500, qty_sold_24h: 4 }),
+    craft({ recipe_id: 2, item_id: 20, profit: -50, profit_pct: -10, qty_sold_24h: 9, category: "Elixirs" }),
+    // Eine Zutat ohne Preis: keine Kosten, kein Gewinn.
+    craft({ recipe_id: 3, item_id: 30, unpriced: 1, cost: null, profit: null, profit_pct: null }),
+    craft({ recipe_id: 4, item_id: 40, profit: 900, qty_sold_24h: 0, profession: "Mining", category: "Smelted Bars", name: "Smelt Copper" }),
+    // Ein zweites Rezept fuer dasselbe Item wie das erste, aber lohnender.
+    craft({ recipe_id: 5, item_id: 10, profit: 700, profession: "Cooking", category: null }),
+  ]
+  const everything = { query: "", profession: ALL, category: ALL, profitableOnly: false, soldOnly: false }
+  const ids = (rows: Craft[]) => rows.map((row) => row.recipe_id)
+
+  it("nennt ein Rezept nach dem Item, das es herstellt", () => {
+    expect(craftName(crafts[3], { "40": "Copper Bar" })).toBe("Copper Bar")
+    expect(craftName(crafts[3], {})).toBe("Smelt Copper")
+  })
+
+  it("zaehlt Berufe und ihre Gruppen", () => {
+    expect(professions(crafts)).toEqual([
+      { value: "Alchemy", count: 3 },
+      { value: "Cooking", count: 1 },
+      { value: "Mining", count: 1 },
+    ])
+    expect(craftCategories(crafts, "Alchemy")).toEqual([
+      { value: "Potions", count: 2 },
+      { value: "Elixirs", count: 1 },
+    ])
+    // Ein Rezept ohne Gruppe ergibt keine leere Auswahl.
+    expect(craftCategories(crafts, "Cooking")).toEqual([])
+  })
+
+  it("filtert nach Beruf, Gruppe, Gewinn und Verkaeufen", () => {
+    expect(ids(filterCrafts(crafts, everything, {}))).toEqual([1, 2, 3, 4, 5])
+    expect(ids(filterCrafts(crafts, { ...everything, profession: "Alchemy" }, {}))).toEqual([1, 2, 3])
+    expect(ids(filterCrafts(crafts, { ...everything, profession: "Alchemy", category: "Elixirs" }, {}))).toEqual([2])
+    // Verlust und fehlender Preis sind beide nicht lohnend.
+    expect(ids(filterCrafts(crafts, { ...everything, profitableOnly: true }, {}))).toEqual([1, 4, 5])
+    // 0 verkauft zaehlt nicht als verkauft.
+    expect(ids(filterCrafts(crafts, { ...everything, soldOnly: true }, {}))).toEqual([1, 2])
+  })
+
+  it("findet ein Rezept ueber den Namen des Items, den eigenen Namen und die ID", () => {
+    const names = { "40": "Copper Bar" }
+    expect(ids(filterCrafts(crafts, { ...everything, query: "copper bar" }, names))).toEqual([4])
+    expect(ids(filterCrafts(crafts, { ...everything, query: "smelt" }, names))).toEqual([4])
+    expect(ids(filterCrafts(crafts, { ...everything, query: "10" }, names))).toEqual([1, 5])
+  })
+
+  it("sortiert nach Gewinn und stellt Rezepte ohne Preis ans Ende", () => {
+    expect(ids(sortCrafts(crafts, { key: "profit", dir: -1 }, {}))).toEqual([4, 5, 1, 2, 3])
+    expect(ids(sortCrafts(crafts, { key: "profit", dir: 1 }, {}))).toEqual([2, 1, 5, 4, 3])
+    expect(nextSort({ key: "profit", dir: -1 }, "profession")).toEqual({ key: "profession", dir: 1 })
+  })
+
+  it("buendelt Rezepte nach Item, das lohnendste zuerst", () => {
+    const byItem = craftsByItem(crafts)
+    expect(ids(byItem.get(10) ?? [])).toEqual([5, 1])
+    expect(ids(byItem.get(30) ?? [])).toEqual([3])
+    expect(byItem.get(99)).toBeUndefined()
+  })
+
+  it("buendelt Zutaten nach Rezept, teuerster Posten zuerst, ohne Preis ans Ende", () => {
+    const reagent = (partial: Partial<CraftReagent> & Pick<CraftReagent, "recipe_id" | "item_id">): CraftReagent => ({
+      name: `Item ${partial.item_id}`,
+      count: 1,
+      unit_price: 10,
+      source: "ah",
+      vendor: null,
+      zone: null,
+      n_vendors: null,
+      ...partial,
+    })
+    const groups = groupReagents([
+      reagent({ recipe_id: 1, item_id: 100, unit_price: 5, count: 2 }),
+      reagent({ recipe_id: 1, item_id: 101, unit_price: null, source: null }),
+      reagent({ recipe_id: 1, item_id: 102, unit_price: 3, count: 20 }),
+      reagent({ recipe_id: 2, item_id: 100 }),
+    ])
+    expect(groups.get(1)?.map((row) => row.item_id)).toEqual([102, 100, 101])
+    expect(groups.get(2)?.map((row) => row.item_id)).toEqual([100])
   })
 })
 

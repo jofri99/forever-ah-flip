@@ -10,6 +10,12 @@ eine Form, die ein Browser mit wenigen Teilabrufen lesen kann:
     market.parquet   der juengste Stand, eine Zeile je Item, dazu 24-Stunden-Werte.
     meta.json        was drin ist und von wann.
 
+Mit einem lokalen Abzug von ForeverDB kommen dazu:
+
+    vendor_flips.parquet    beim Haendler kaufen, im Auktionshaus verkaufen
+    crafts.parquet          je Rezept Kosten, Erloes und Gewinn
+    craft_reagents.parquet  die Zutaten dieser Rezepte mit Preis und Bezugsquelle
+
 Diese Dateien sind abgeleitet und jederzeit neu baubar. Sie gehoeren deshalb
 nicht ins Warehouse und nicht in Git.
 """
@@ -23,7 +29,7 @@ from typing import Any
 
 import duckdb
 
-from . import foreverdb_dump, names, store
+from . import crafting, foreverdb_dump, names, store
 from .config import ROOT, Settings
 
 HOURLY = "hourly.parquet"
@@ -31,6 +37,8 @@ MARKET = "market.parquet"
 META = "meta.json"
 NAMES = "names.json"      # optional: {"2589": "Leinenstoff", ...}
 VENDOR_FLIPS = "vendor_flips.parquet"   # optional, nur mit lokalem Abzug von ForeverDB
+CRAFTS = "crafts.parquet"               # ebenso: braucht den Abzug der Rezepte
+CRAFT_REAGENTS = "craft_reagents.parquet"
 
 # Gesammelt wird das Auktionshaus der Horde. Haendler dieser Fraktion sind von dort
 # aus nicht erreichbar.
@@ -188,30 +196,47 @@ def _build_market(con: duckdb.DuckDBPyConnection) -> int:
     return con.execute("SELECT count(*) FROM market").fetchone()[0]
 
 
-def _build_vendor_flips(con: duckdb.DuckDBPyConnection, settings: Settings) -> int | None:
-    """Beim Haendler kaufen, im Auktionshaus verkaufen.
+def _load_vendor_offers(con: duckdb.DuckDBPyConnection, settings: Settings) -> bool:
+    """Was erreichbare Haendler verkaufen: eine Zeile je Haendler und Item.
 
-    Je Item der guenstigste erreichbare Haendler gegen das guenstigste Angebot im
-    Auktionshaus, Gewinn nach 5 % Gebuehr. Setzt die Tabelle `market` voraus. Gibt None
-    zurueck, wenn es keinen Abzug der Haendler gibt - in Actions also immer.
+    Ohne Abzug der Haendler - in Actions also immer - bleibt die Tabelle leer,
+    und es kommt False zurueck.
     """
     from . import db        # hier, um einen Importkreis zu vermeiden
 
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE vendor_offers (vendor VARCHAR, zone VARCHAR, side VARCHAR, "
+        "reputation VARCHAR, item_id INTEGER, price_per_item DOUBLE, limited BOOLEAN, "
+        "limited_stock INTEGER, seen_in_forever BOOLEAN, vendor_id INTEGER)"
+    )
     source = db.vendor_details_source(settings)
     if source is None:
-        return None
+        return False
     con.execute(
         f"""
+        INSERT INTO vendor_offers
+        SELECT v.name, v.zone, v.side, v.reputationFaction.name,
+               s.itemId, s.pricePerItem, coalesce(s.limited, false),
+               s.limitedStockCount, s.seenInForever, v.id
+        FROM ({source}) v, unnest(v.sells) AS t(s)
+        WHERE v.side <> '{UNREACHABLE_SIDE}' AND s.pricePerItem > 0
+        """
+    )
+    return True
+
+
+def _build_vendor_flips(con: duckdb.DuckDBPyConnection) -> int:
+    """Beim Haendler kaufen, im Auktionshaus verkaufen.
+
+    Je Item der guenstigste erreichbare Haendler gegen das guenstigste Angebot im
+    Auktionshaus, Gewinn nach 5 % Gebuehr. Setzt die Tabellen `market` und
+    `vendor_offers` voraus.
+    """
+    con.execute(
+        """
         CREATE OR REPLACE TEMP TABLE vendor_flips AS
-        WITH offers AS (
-            SELECT v.name AS vendor, v.zone, v.side, v.reputationFaction.name AS reputation,
-                   s.itemId AS item_id, s.pricePerItem AS price_per_item, s.limited,
-                   s.limitedStockCount AS limited_stock, s.seenInForever AS seen_in_forever, v.id AS vendor_id
-            FROM ({source}) v, unnest(v.sells) AS t(s)
-            WHERE v.side <> '{UNREACHABLE_SIDE}' AND s.pricePerItem > 0
-        ),
-        cheapest AS (
-            SELECT * FROM offers
+        WITH cheapest AS (
+            SELECT * FROM vendor_offers
             QUALIFY row_number() OVER (PARTITION BY item_id ORDER BY price_per_item, vendor_id) = 1
         )
         SELECT m.item_id, m.kind, m.item_class, m.item_subclass,
@@ -230,6 +255,62 @@ def _build_vendor_flips(con: duckdb.DuckDBPyConnection, settings: Settings) -> i
         """
     )
     return con.execute("SELECT count(*) FROM vendor_flips").fetchone()[0]
+
+
+def _build_crafts(con: duckdb.DuckDBPyConnection, settings: Settings) -> int | None:
+    """Herstellen und im Auktionshaus verkaufen: je Rezept Kosten, Erloes, Gewinn.
+
+    Die Rechnung selbst steht in crafting.py und gilt genauso in der lokalen
+    Datenbank. Hier kommen nur die Preise aus `market` und `vendor_offers` dazu.
+    Gibt None zurueck, wenn es keinen Abzug der Rezepte gibt.
+    """
+    source = crafting.recipes_source(settings)
+    if source is None:
+        return None
+    table = "CREATE OR REPLACE TEMP TABLE"
+    con.execute(f"{table} foreverdb_recipes AS {source}")
+    con.execute(
+        f"""
+        {table} ah_prices AS
+        SELECT item_id, kind, min_price AS ah_price, n_listings, qty_sold_24h, sales_hours_24h,
+               item_class, item_subclass
+        FROM market
+        WHERE min_price > 0
+        QUALIFY row_number() OVER (PARTITION BY item_id ORDER BY min_price, kind) = 1;
+        """
+    )
+    # Zum Herstellen taugt nur, wer unbegrenzt liefert.
+    con.execute(crafting.vendor_prices_sql(table, "SELECT * FROM vendor_offers WHERE NOT limited"))
+    con.execute(crafting.model_sql(table))
+    con.execute(crafting.costs_sql(table))
+
+    # Fuer die Anzeige nur, was sich im Auktionshaus verkaufen laesst. Zahlen als
+    # DOUBLE oder INTEGER, damit im Browser nichts als BigInt ankommt.
+    con.execute(
+        f"""
+        {table} crafts_out AS
+        SELECT recipe_id::INTEGER AS recipe_id, name, profession, category, skill::INTEGER AS skill,
+               item_id::INTEGER AS item_id, kind, item_count::DOUBLE AS item_count,
+               reagents::INTEGER AS reagents, unpriced::INTEGER AS unpriced,
+               cost_known::DOUBLE AS cost_known, cost::DOUBLE AS cost, ah_price::DOUBLE AS ah_price,
+               profit::DOUBLE AS profit, profit_pct::DOUBLE AS profit_pct,
+               n_listings::INTEGER AS n_listings, qty_sold_24h::DOUBLE AS qty_sold_24h,
+               sales_hours_24h::FLOAT AS sales_hours_24h,
+               learned, trainer_cost::DOUBLE AS trainer_cost, recipe_item_id::INTEGER AS recipe_item_id,
+               recipe_price::DOUBLE AS recipe_price, recipe_source,
+               item_class, item_subclass, new_in_forever
+        FROM crafts
+        WHERE ah_price IS NOT NULL;
+
+        {table} craft_reagents_out AS
+        SELECT recipe_id::INTEGER AS recipe_id, item_id::INTEGER AS item_id, name,
+               count::INTEGER AS count, unit_price::DOUBLE AS unit_price, source, vendor, zone,
+               n_vendors::INTEGER AS n_vendors
+        FROM craft_reagents
+        WHERE recipe_id IN (SELECT recipe_id FROM crafts_out);
+        """
+    )
+    return con.execute("SELECT count(*) FROM crafts_out").fetchone()[0]
 
 
 def _iso(epoch_seconds: int | None) -> str | None:
@@ -272,13 +353,28 @@ def build(
 
         # Haendler-Flips gibt es nur mit dem lokalen Abzug. Eine alte Datei darf nicht
         # liegen bleiben, wenn der Abzug fehlt - sie wuerde veraltete Zahlen zeigen.
-        flip_rows = _build_vendor_flips(con, settings)
+        flip_rows = _build_vendor_flips(con) if _load_vendor_offers(con, settings) else None
         if flip_rows is None:
             (out_dir / VENDOR_FLIPS).unlink(missing_ok=True)
         else:
             store.write_parquet(
                 con, "vendor_flips", out_dir / VENDOR_FLIPS,
                 order_by="profit DESC, item_id", compression=COMPRESSION,
+            )
+
+        # Dasselbe fuer das Herstellen: nur mit dem Abzug der Rezepte.
+        craft_rows = _build_crafts(con, settings)
+        if craft_rows is None:
+            (out_dir / CRAFTS).unlink(missing_ok=True)
+            (out_dir / CRAFT_REAGENTS).unlink(missing_ok=True)
+        else:
+            store.write_parquet(
+                con, "crafts_out", out_dir / CRAFTS,
+                order_by="profit DESC NULLS LAST, recipe_id", compression=COMPRESSION,
+            )
+            store.write_parquet(
+                con, "craft_reagents_out", out_dir / CRAFT_REAGENTS,
+                order_by="recipe_id, item_id", compression=COMPRESSION,
             )
 
         # Ohne Namen zeigt die Seite "Item 2589". Zuerst gilt Blizzards Name. Wo Blizzard
@@ -324,6 +420,7 @@ def build(
         "items_with_name": named_in_market,
         # Die Seite zeigt die Ansicht nur, wenn hier eine Zahl steht.
         "vendor_flips": flip_rows,
+        "crafts": craft_rows,
         "name_sources": {"blizzard": named_official, "foreverdb": named_in_market - named_official},
         "files": {
             HOURLY: {
@@ -358,6 +455,8 @@ def main(settings: Settings, out_dir: Path | None = None, house: int | None = No
     print(f"  {MARKET:<15} {market['rows']:>9,} Zeilen, {market['bytes'] / 1024:>8,.0f} KB")
     if meta["vendor_flips"] is not None:
         print(f"  {VENDOR_FLIPS:<15} {meta['vendor_flips']:>9,} Zeilen")
+    if meta["crafts"] is not None:
+        print(f"  {CRAFTS:<15} {meta['crafts']:>9,} Zeilen")
     sources = meta["name_sources"]
     print(
         f"  Namen fuer {meta['items_with_name']:,} von {meta['items']:,} Items "

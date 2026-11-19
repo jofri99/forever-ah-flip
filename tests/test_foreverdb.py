@@ -381,3 +381,71 @@ def test_refresh_does_not_touch_the_item_details(tmp_path: Path) -> None:
     assert result["complete"] is True
     assert foreverdb_dump.details_done(tmp_path, "items") == {7}
     assert result["requests"] == 2 + 1 + 3        # zwei Seiten Items, eine Seite Haendler, drei Sortimente
+
+
+class FakeProfessions(FakeCatalog):
+    """Zwei Berufe: Alchemie mit 150 Rezepten auf zwei Seiten, Kochen mit zweien."""
+
+    COUNTS = {"alchemy": 150, "cooking": 2}
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.fail_slug: str | None = None
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append({"url": url, "params": dict(params or {})})
+        if url.endswith("/professions"):
+            rows = [{"slug": slug, "name": slug.title(), "recipeCount": count} for slug, count in self.COUNTS.items()]
+            return FakeResponse(200, {"data": rows, "meta": {"total": len(rows)}})
+        slug = url.rsplit("/", 1)[1]
+        if slug == self.fail_slug:
+            return FakeResponse(402)
+        total = self.COUNTS[slug]
+        offset = int((params or {}).get("offset", 0))
+        limit = int((params or {}).get("limit", 25))
+        recipes = [
+            {"spellId": 1000 * len(slug) + i, "name": f"{slug} {i}", "reagents": [{"itemId": i, "count": 1}]}
+            for i in range(offset + 1, min(offset + limit, total) + 1)
+        ]
+        data = {"slug": slug, "name": slug.title(), "ranks": [{"rank": "Apprentice", "maxSkill": 75}], "recipes": recipes}
+        return FakeResponse(200, {"data": data, "meta": {"total": total, "limit": limit, "offset": offset}})
+
+
+def test_recipes_are_paged_per_profession_and_tagged_with_it(tmp_path: Path) -> None:
+    session = FakeProfessions()
+
+    result = foreverdb_dump.dump_recipes(make_client(session), tmp_path)
+
+    assert result["complete"] is True
+    assert (result["professions"], result["recipes"]) == (2, 152)
+    assert result["requests"] == 1 + 2 + 1        # die Uebersicht, zwei Seiten Alchemie, eine Seite Kochen
+    assert [c["params"].get("offset") for c in session.calls] == [None, 0, 100, 0]
+
+    recipes = [json.loads(line) for line in (tmp_path / foreverdb_dump.RECIPES_FILE).read_text(encoding="utf-8").splitlines()]
+    assert len(recipes) == 152
+    assert {r["profession"] for r in recipes} == {"alchemy", "cooking"}
+    assert recipes[-1]["professionName"] == "Cooking" and recipes[-1]["reagents"] == [{"itemId": 2, "count": 1}]
+
+    # Der Beruf steht einmal da, mit seinen Raengen, aber ohne die Rezepte.
+    professions = [json.loads(line) for line in (tmp_path / foreverdb_dump.PROFESSIONS_FILE).read_text(encoding="utf-8").splitlines()]
+    assert [p["slug"] for p in professions] == ["alchemy", "cooking"]
+    assert professions[0]["ranks"][0]["maxSkill"] == 75 and "recipes" not in professions[0]
+
+
+def test_recipes_are_only_written_when_complete(tmp_path: Path) -> None:
+    (tmp_path / foreverdb_dump.RECIPES_FILE).write_text('{"spellId":1,"name":"kept"}\n', encoding="utf-8")
+    session = FakeProfessions()
+    session.fail_slug = "cooking"
+
+    result = foreverdb_dump.dump_recipes(make_client(session), tmp_path)
+
+    assert result["complete"] is False
+    assert "Tageskontingent" in result["stopped"]
+    # Der bisherige Abzug ist unberuehrt, und es liegt keine halbe Datei daneben.
+    assert names_in(tmp_path / foreverdb_dump.RECIPES_FILE) == ["kept"]
+    assert sorted(p.name for p in tmp_path.iterdir()) == [foreverdb_dump.RECIPES_FILE]
+
+    # Auch eine Grenze fuer den Lauf bricht ab, ohne etwas zu schreiben.
+    result = foreverdb_dump.dump_recipes(make_client(FakeProfessions()), tmp_path, max_requests=2)
+    assert result["complete"] is False and result["requests"] == 2
+    assert names_in(tmp_path / foreverdb_dump.RECIPES_FILE) == ["kept"]

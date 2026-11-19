@@ -52,9 +52,14 @@ def build_parser() -> argparse.ArgumentParser:
     )
     vendors.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
 
+    recipes = sub.add_parser(
+        "foreverdb-recipes", help="zieht alle Berufe mit Rezepten, Zutaten und Lernquellen von ForeverDB ab"
+    )
+    recipes.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
+
     refresh = sub.add_parser(
         "foreverdb-refresh",
-        help="zieht Item-Liste, Haendler und Sortimente neu ab und tauscht sie erst am Ende aus",
+        help="zieht Item-Liste, Haendler, Sortimente und Rezepte neu ab und tauscht sie erst am Ende aus",
     )
     refresh.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
 
@@ -116,6 +121,16 @@ def main(argv: list[str] | None = None) -> int:
 
         try:
             return foreverdb_dump.refresh_main(config, max_requests=args.max_requests)
+        except (ForeverDBError, RuntimeError) as exc:
+            print(exc, file=sys.stderr)
+            return 2
+
+    if args.command == "foreverdb-recipes":
+        from . import foreverdb_dump
+        from .foreverdb import ForeverDBError
+
+        try:
+            return foreverdb_dump.recipes_main(config, max_requests=args.max_requests)
         except (ForeverDBError, RuntimeError) as exc:
             print(exc, file=sys.stderr)
             return 2

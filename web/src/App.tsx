@@ -1,6 +1,7 @@
 import { lazy, Suspense, useDeferredValue, useEffect, useMemo, useState } from "react"
 import { Moon, Sun } from "lucide-react"
 
+import { CraftTable } from "@/components/craft-table"
 import { FlipTable } from "@/components/flip-table"
 import { MarketTable } from "@/components/market-table"
 import { useTheme } from "@/components/theme-provider"
@@ -18,20 +19,36 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Switch } from "@/components/ui/switch"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useHashSelection } from "@/hooks/use-hash-selection"
-import { loadMarket, loadMeta, loadNames, loadVendorFlips } from "@/lib/data"
+import {
+  loadCraftReagents,
+  loadCrafts,
+  loadMarket,
+  loadMeta,
+  loadNames,
+  loadVendorFlips,
+} from "@/lib/data"
 import { formatDateTime, formatInt } from "@/lib/format"
 import {
   ALL,
   categories,
+  craftCategories,
+  craftsByItem,
+  filterCrafts,
   filterFlips,
   filterRows,
+  groupReagents,
   nextSort,
+  professions,
   rowKey,
+  sortCrafts,
   sortFlips,
   sortRows,
   subcategories,
 } from "@/lib/rows"
 import type {
+  Craft,
+  CraftReagent,
+  CraftSortKey,
   FlipSortKey,
   KindFilter,
   MarketRow,
@@ -51,9 +68,19 @@ const ItemDetail = lazy(() =>
 type Status =
   | { state: "loading" }
   | { state: "error"; message: string }
-  | { state: "ready"; meta: Meta; market: MarketRow[]; names: Names; flips: VendorFlip[] }
+  | {
+      state: "ready"
+      meta: Meta
+      market: MarketRow[]
+      names: Names
+      flips: VendorFlip[]
+      crafts: Craft[]
+      reagents: CraftReagent[]
+    }
 
-type View = "market" | "flips"
+type View = "market" | "flips" | "crafts"
+
+const NO_CRAFTS: Craft[] = []
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
@@ -81,8 +108,10 @@ export function App() {
   const [subcategory, setSubcategory] = useState(ALL)
   const [sort, setSort] = useState<Sort>({ key: "n_listings", dir: -1 })
   const [flipSort, setFlipSort] = useState<Sort<FlipSortKey>>({ key: "profit", dir: -1 })
+  const [craftSort, setCraftSort] = useState<Sort<CraftSortKey>>({ key: "profit", dir: -1 })
   const [unlimitedOnly, setUnlimitedOnly] = useState(false)
   const [soldOnly, setSoldOnly] = useState(false)
+  const [profitableOnly, setProfitableOnly] = useState(true)
   const [selectedKey, select] = useHashSelection()
   const deferredQuery = useDeferredValue(query)
 
@@ -91,12 +120,16 @@ export function App() {
     ;(async () => {
       try {
         const meta = await loadMeta()
-        const [market, names, flips] = await Promise.all([
+        const [market, names, flips, crafts, reagents] = await Promise.all([
           loadMarket(meta),
           loadNames(meta),
           loadVendorFlips(meta),
+          loadCrafts(meta),
+          loadCraftReagents(meta),
         ])
-        if (!cancelled) setStatus({ state: "ready", meta, market, names, flips })
+        if (!cancelled) {
+          setStatus({ state: "ready", meta, market, names, flips, crafts, reagents })
+        }
       } catch (error) {
         if (!cancelled) {
           setStatus({ state: "error", message: error instanceof Error ? error.message : String(error) })
@@ -109,9 +142,11 @@ export function App() {
   }, [])
 
   const ready = status.state === "ready" ? status : null
-  // Haendler-Flips gibt es nur mit lokalem Abzug. Ohne sie bleibt es bei der einen Ansicht.
+  // Haendler-Flips und Rezepte gibt es nur mit lokalem Abzug. Ohne sie bleibt es beim Markt.
   const hasFlips = (ready?.flips.length ?? 0) > 0
+  const hasCrafts = (ready?.crafts.length ?? 0) > 0
   const showFlips = view === "flips" && hasFlips
+  const showCrafts = view === "crafts" && hasCrafts
 
   const marketRows = useMemo(() => {
     if (!ready) return []
@@ -128,20 +163,48 @@ export function App() {
     return sortFlips(filterFlips(filtered, { unlimitedOnly, soldOnly }), flipSort, ready.names)
   }, [ready, deferredQuery, category, subcategory, unlimitedOnly, soldOnly, flipSort])
 
-  // Die Auswahl der Typen richtet sich nach dem, was die gerade gezeigte Ansicht enthaelt.
+  const craftRows = useMemo(() => {
+    if (!ready) return []
+    const filtered = filterCrafts(
+      ready.crafts,
+      { query: deferredQuery, profession: category, category: subcategory, profitableOnly, soldOnly },
+      ready.names,
+    )
+    return sortCrafts(filtered, craftSort, ready.names)
+  }, [ready, deferredQuery, category, subcategory, profitableOnly, soldOnly, craftSort])
+
+  // Die Auswahl richtet sich nach der gezeigten Ansicht: Typ und Untertyp des Items,
+  // bei den Rezepten Beruf und Gruppe.
   const source = ready ? (showFlips ? ready.flips : ready.market) : null
-  const categoryOptions = useMemo(() => (source ? categories(source) : []), [source])
-  const subcategoryOptions = useMemo(
-    () => (source && category !== ALL ? subcategories(source, category) : []),
-    [source, category],
+  const crafts = ready?.crafts ?? NO_CRAFTS
+  const categoryOptions = useMemo(
+    () => (showCrafts ? professions(crafts) : source ? categories(source) : []),
+    [showCrafts, crafts, source],
   )
+  const subcategoryOptions = useMemo(() => {
+    if (category === ALL) return []
+    if (showCrafts) return craftCategories(crafts, category)
+    return source ? subcategories(source, category) : []
+  }, [showCrafts, crafts, source, category])
 
   const selectedRow = useMemo(
     () => ready?.market.find((row) => rowKey(row) === selectedKey) ?? null,
     [ready, selectedKey],
   )
 
-  const shown = showFlips ? flipRows.length : marketRows.length
+  // Fuer die Detailansicht: welche Rezepte stellen ein Item her, was brauchen sie,
+  // und unter welchem Schluessel steht eine Zutat im Markt.
+  const craftIndex = useMemo(() => craftsByItem(crafts), [crafts])
+  const reagentIndex = useMemo(() => groupReagents(ready?.reagents ?? []), [ready])
+  const marketKeys = useMemo(() => {
+    const keys = new Map<number, string>()
+    for (const row of ready?.market ?? []) {
+      if (!keys.has(row.item_id)) keys.set(row.item_id, rowKey(row))
+    }
+    return keys
+  }, [ready])
+
+  const shown = showCrafts ? craftRows.length : showFlips ? flipRows.length : marketRows.length
 
   return (
     <div className="mx-auto flex min-h-svh max-w-7xl flex-col gap-4 p-4 md:p-6">
@@ -183,24 +246,33 @@ export function App() {
                 meta={ready.meta}
                 row={selectedRow}
                 names={ready.names}
+                crafts={craftIndex.get(selectedRow.item_id) ?? NO_CRAFTS}
+                reagents={reagentIndex}
+                marketKey={(itemId) => marketKeys.get(itemId) ?? null}
+                onSelect={select}
                 onClose={() => select(null)}
               />
             </Suspense>
           )}
 
-          {hasFlips && (
+          {(hasFlips || hasCrafts) && (
             <Tabs
               value={view}
               onValueChange={(value) => {
                 setView(value as View)
-                // Die beiden Ansichten kennen verschiedene Typen.
+                // Jede Ansicht kennt andere Typen.
                 setCategory(ALL)
                 setSubcategory(ALL)
               }}
             >
               <TabsList>
                 <TabsTrigger value="market">Market</TabsTrigger>
-                <TabsTrigger value="flips">Vendor flips ({formatInt(ready.flips.length)})</TabsTrigger>
+                {hasFlips && (
+                  <TabsTrigger value="flips">Vendor flips ({formatInt(ready.flips.length)})</TabsTrigger>
+                )}
+                {hasCrafts && (
+                  <TabsTrigger value="crafts">Crafting ({formatInt(ready.crafts.length)})</TabsTrigger>
+                )}
               </TabsList>
             </Tabs>
           )}
@@ -213,6 +285,15 @@ export function App() {
             </p>
           )}
 
+          {showCrafts && (
+            <p className="text-sm text-muted-foreground">
+              Buy the reagents, craft, sell on the auction house. Every reagent is priced at its
+              cheapest current source, auction house or vendor. Profit is per craft, after the 5%
+              auction house cut, against the lowest current listing. Recipes come from ForeverDB;
+              learning one costs extra and cooldowns are not considered.
+            </p>
+          )}
+
           <div className="flex flex-wrap items-center gap-3">
             <Input
               type="search"
@@ -222,7 +303,7 @@ export function App() {
               aria-label="Search item or ID"
               className="max-w-sm"
             />
-            {!showFlips && (
+            {!showFlips && !showCrafts && (
               <Select value={kind} onValueChange={(value) => setKind(value as KindFilter)}>
                 <SelectTrigger className="w-44" aria-label="Listing kind">
                   <SelectValue />
@@ -242,11 +323,11 @@ export function App() {
                   setSubcategory(ALL)
                 }}
               >
-                <SelectTrigger className="w-52" aria-label="Category">
+                <SelectTrigger className="w-52" aria-label={showCrafts ? "Profession" : "Category"}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={ALL}>All categories</SelectItem>
+                  <SelectItem value={ALL}>{showCrafts ? "All professions" : "All categories"}</SelectItem>
                   {categoryOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.value} ({formatInt(option.count)})
@@ -257,11 +338,11 @@ export function App() {
             )}
             {subcategoryOptions.length > 1 && (
               <Select value={subcategory} onValueChange={setSubcategory}>
-                <SelectTrigger className="w-52" aria-label="Subcategory">
+                <SelectTrigger className="w-52" aria-label={showCrafts ? "Category" : "Subcategory"}>
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
-                  <SelectItem value={ALL}>All subcategories</SelectItem>
+                  <SelectItem value={ALL}>{showCrafts ? "All categories" : "All subcategories"}</SelectItem>
                   {subcategoryOptions.map((option) => (
                     <SelectItem key={option.value} value={option.value}>
                       {option.value} ({formatInt(option.count)})
@@ -271,23 +352,39 @@ export function App() {
               </Select>
             )}
             {showFlips && (
-              <>
-                <div className="flex items-center gap-2">
-                  <Switch id="unlimited" checked={unlimitedOnly} onCheckedChange={setUnlimitedOnly} />
-                  <Label htmlFor="unlimited">Unlimited stock only</Label>
-                </div>
-                <div className="flex items-center gap-2">
-                  <Switch id="sold" checked={soldOnly} onCheckedChange={setSoldOnly} />
-                  <Label htmlFor="sold">Sold in last 24h</Label>
-                </div>
-              </>
+              <div className="flex items-center gap-2">
+                <Switch id="unlimited" checked={unlimitedOnly} onCheckedChange={setUnlimitedOnly} />
+                <Label htmlFor="unlimited">Unlimited stock only</Label>
+              </div>
+            )}
+            {showCrafts && (
+              <div className="flex items-center gap-2">
+                <Switch id="profitable" checked={profitableOnly} onCheckedChange={setProfitableOnly} />
+                <Label htmlFor="profitable">Profitable only</Label>
+              </div>
+            )}
+            {(showFlips || showCrafts) && (
+              <div className="flex items-center gap-2">
+                <Switch id="sold" checked={soldOnly} onCheckedChange={setSoldOnly} />
+                <Label htmlFor="sold">Sold in last 24h</Label>
+              </div>
             )}
             <span className="text-sm text-muted-foreground">
-              {formatInt(shown)} {shown === 1 ? "item" : "items"}
+              {formatInt(shown)} {showCrafts ? "recipe" : "item"}
+              {shown === 1 ? "" : "s"}
             </span>
           </div>
 
-          {showFlips ? (
+          {showCrafts ? (
+            <CraftTable
+              rows={craftRows}
+              names={ready.names}
+              sort={craftSort}
+              selectedKey={selectedKey}
+              onSort={(key: CraftSortKey) => setCraftSort((current) => nextSort(current, key))}
+              onSelect={select}
+            />
+          ) : showFlips ? (
             <FlipTable
               rows={flipRows}
               names={ready.names}
@@ -320,10 +417,10 @@ export function App() {
           TradingView Lightweight Charts
         </a>
         .
-        {ready && ((ready.meta.name_sources?.foreverdb ?? 0) > 0 || hasFlips) && (
+        {ready && ((ready.meta.name_sources?.foreverdb ?? 0) > 0 || hasFlips || hasCrafts) && (
           <>
             {" "}
-            Some names and all vendor data from{" "}
+            Some names and all vendor and recipe data from{" "}
             <a
               href="https://foreverdb.net"
               target="_blank"

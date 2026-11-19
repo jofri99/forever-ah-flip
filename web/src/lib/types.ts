@@ -57,6 +57,8 @@ export interface Meta {
   name_sources?: { blizzard: number; foreverdb: number }
   /** Zahl der Haendler-Flips, oder null, wenn es die Datei nicht gibt. */
   vendor_flips?: number | null
+  /** Zahl der Rezepte, deren Ergebnis im Auktionshaus steht - oder null ohne Abzug. */
+  crafts?: number | null
 }
 
 /** Item-ID als Text -> Name. Fehlt ein Eintrag, zeigt die Seite "Item 2589". */
@@ -105,6 +107,82 @@ export interface VendorFlip {
   reputation: string | null
   seen_in_forever: boolean | null
 }
+
+/** Wie man ein Rezept lernt. */
+export type Learned = "automatic" | "trainer" | "recipe" | "unknown"
+
+/** Woher ein Preis stammt: Auktionshaus oder Haendler. */
+export type PriceSource = "ah" | "vendor"
+
+/**
+ * Eine Zeile aus crafts.parquet: ein Rezept, dessen Ergebnis im Auktionshaus steht.
+ * Kosten und Gewinn gelten fuer einen Durchgang, also fuer `item_count` Stueck.
+ */
+export interface Craft {
+  recipe_id: number
+  /** Name des Rezepts - meist der des Items, beim Verhuetten z. B. "Smelt Copper". */
+  name: string
+  profession: string
+  /** Gruppe im Berufsfenster, z. B. "Potions". */
+  category: string | null
+  /** Ab diesem Skill lernbar. */
+  skill: number | null
+  /** Was das Rezept herstellt. */
+  item_id: number
+  kind: Kind
+  /** Stueck je Durchgang; bei zufaelliger Menge die Mitte. */
+  item_count: number
+  /** Zahl der Zutaten, und wie viele davon gerade keinen Preis haben. */
+  reagents: number
+  unpriced: number
+  /** Summe der Zutaten mit Preis. */
+  cost_known: number
+  /** Kosten aller Zutaten - fehlt, sobald eine keinen Preis hat. */
+  cost: number | null
+  /** Guenstigstes Angebot des Ergebnisses im Auktionshaus, je Stueck. */
+  ah_price: number
+  /** Gewinn je Durchgang nach 5 % Gebuehr des Auktionshauses. */
+  profit: number | null
+  profit_pct: number | null
+  n_listings: number
+  qty_sold_24h: number | null
+  sales_hours_24h: number | null
+  learned: Learned
+  trainer_cost: number | null
+  /** Das Item, das das Rezept lehrt, mit dem, was es gerade kostet. */
+  recipe_item_id: number | null
+  recipe_price: number | null
+  recipe_source: PriceSource | null
+  item_class: string | null
+  item_subclass: string | null
+  new_in_forever: boolean
+}
+
+/** Eine Zeile aus craft_reagents.parquet: eine Zutat eines Rezepts mit ihrem Preis. */
+export interface CraftReagent {
+  recipe_id: number
+  item_id: number
+  name: string
+  count: number
+  /** Guenstigster Preis je Stueck - fehlt, wenn das Item gerade nirgends zu haben ist. */
+  unit_price: number | null
+  source: PriceSource | null
+  /** Nur beim Haendler: einer, der es verkauft, wo er steht, und wie viele es insgesamt fuehren. */
+  vendor: string | null
+  zone: string | null
+  n_vendors: number | null
+}
+
+export type CraftSortKey =
+  | "name"
+  | "profession"
+  | "skill"
+  | "cost"
+  | "ah_price"
+  | "profit"
+  | "profit_pct"
+  | "n_listings"
+  | "qty_sold_24h"
 
 export type FlipSortKey =
   | "name"

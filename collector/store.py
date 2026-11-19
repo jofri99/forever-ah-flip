@@ -39,6 +39,34 @@ def sql_path(path: Path) -> str:
     return path.as_posix().replace("'", "''")
 
 
+def split_columns(definition: str) -> list[str]:
+    """Zerlegt "a INTEGER, b STRUCT(x INTEGER, y VARCHAR)" an den Kommas der obersten Ebene."""
+    parts, depth, current = [], 0, ""
+    for char in definition:
+        if char == "(":
+            depth += 1
+        elif char == ")":
+            depth -= 1
+        if char == "," and depth == 0:
+            parts.append(current.strip())
+            current = ""
+        else:
+            current += char
+    if current.strip():
+        parts.append(current.strip())
+    return parts
+
+
+def json_columns(definition: str) -> str:
+    """Macht aus "a INTEGER, b VARCHAR" die Angabe, die read_json als `columns` erwartet.
+
+    Mit festen Spalten traegt eine Sicht auch dann, wenn ein Feld in den bisher
+    abgezogenen Zeilen noch nie vorkam, und unbekannte Felder werden uebergangen.
+    """
+    pairs = (part.split(" ", 1) for part in split_columns(definition))
+    return "{" + ", ".join(f"'{name}': '{kind}'" for name, kind in pairs) + "}"
+
+
 def snapshot_path(root: Path, dataset: str, house: int, ts: dt.datetime) -> Path:
     return root / dataset / f"house={house}" / f"dt={ts:%Y-%m-%d}" / f"{ts:%H%M%S}.parquet"
 

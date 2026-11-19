@@ -87,19 +87,28 @@ def test_build_creates_views_over_every_dataset(filled: Settings) -> None:
 
     assert result["path"] == filled.local_dir / "forever.duckdb"
     assert result["counts"] == {
+        "ah_prices": 2,
         "blizzard_items": 1,
+        "craft_reagents": 0,
+        "crafts": 0,
         "foreverdb_item_details": 0,
         "foreverdb_items": 2,
+        "foreverdb_recipes": 0,
         "foreverdb_vendor_details": 0,
         "history": 4,
+        "item_prices": 2,
         "items": 2,
         "latest": 2,
+        "recipe_items": 0,
+        "recipe_reagents": 0,
+        "recipes": 0,
         "runs": 0,
         "sales": 1,
         "snapshots": 4,
         "sold_daily": 1,
         "vendor_flips": 0,
         "vendor_items": 0,
+        "vendor_prices": 0,
     }
     assert result["present"]["runs"] is False
 
@@ -142,6 +151,10 @@ def test_money_macro_and_json_access(filled: Settings) -> None:
 
     assert rows(filled, "SELECT money(123456), money(2049), money(24), money(NULL), gold(123456)") == [
         ("12g 34s 56c", "20s 49c", "24c", None, 12.35)
+    ]
+    # Ein Verlust behaelt sein Vorzeichen und wird sonst gleich zerlegt.
+    assert rows(filled, "SELECT money(-4263), money(-63), money(-123456)") == [
+        ("-42s 63c", "-63c", "-12g 34s 56c")
     ]
     assert rows(filled, "SELECT raw->>'$.preview_item.armor.value' FROM blizzard_items") == [("7",)]
 
@@ -248,3 +261,108 @@ def test_vendor_flips_compare_the_cheapest_reachable_vendor_with_the_auction_hou
     # Es zaehlt der neutrale: 24c * 0,95 - 10c = 12,8c Gewinn je Stueck. Das Schwert kostet
     # beim Haendler mehr als im Auktionshaus und taucht nicht auf.
     assert flips == [("Linen Cloth", 10.0, 24, 13, 128, "Neutral Goods", "Neutral", True, 2)]
+
+
+def recipe(spell_id: int, name: str, makes: str, reagents: str, learned: str) -> str:
+    """Eine Zeile recipes.jsonl, wie /professions/{slug} sie liefert - gekuerzt."""
+    return (
+        f'{{"spellId":{spell_id},"name":"{name}","category":{{"id":1,"name":"Blades","parent":{{"id":2,"name":"Blacksmithing"}}}},'
+        f'"skill":{{"orange":120,"orangeSource":"client","yellow":140,"green":160,"grey":180}},"requiredLevel":20,'
+        f'"makes":{makes},"effect":null,"reagents":{reagents},"tools":[],"learnedFrom":{learned},'
+        '"newInForever":true,"url":"https://example.invalid/spell","profession":"blacksmithing","professionName":"Blacksmithing"}\n'
+    )
+
+
+def test_crafts_price_every_reagent_at_the_cheaper_source(filled: Settings) -> None:
+    directory = foreverdb_dump.dump_dir(filled)
+    # Im Auktionshaus: das Schwert (647) fuer 450, der Stoff (2589) fuer 24.
+    # Beim Haendler der Horde: Stoff fuer 30 (teurer als im Auktionshaus), Faden (4000)
+    # fuer 10 und die Vorlage (4100) fuer 150. Ein Haendler mit begrenztem Bestand und
+    # einer der Allianz waeren billiger, zaehlen fuers Herstellen aber nicht.
+    (directory / foreverdb_dump.VENDOR_DETAILS_FILE).write_text(
+        '{"id":1,"name":"Horde Supplies","side":"Horde","zone":"Orgrimmar","sells":['
+        '{"itemId":2589,"name":"Linen Cloth","price":30,"stack":1,"pricePerItem":30.0,"limited":false,"seenInForever":true},'
+        '{"itemId":4000,"name":"Thread","price":10,"stack":1,"pricePerItem":10.0,"limited":false,"seenInForever":true},'
+        '{"itemId":4100,"name":"Plans: Destiny","price":150,"stack":1,"pricePerItem":150.0,"limited":false,"seenInForever":true}]}\n'
+        '{"id":2,"name":"Rare Goods","side":"both","zone":"Booty Bay","sells":['
+        '{"itemId":2589,"name":"Linen Cloth","price":5,"stack":1,"pricePerItem":5.0,"limited":true,"limitedStockCount":2,"seenInForever":true}]}\n'
+        '{"id":3,"name":"Alliance Supplies","side":"Alliance","zone":"Stormwind","sells":['
+        '{"itemId":4000,"name":"Thread","price":1,"stack":1,"pricePerItem":1.0,"limited":false,"seenInForever":true}]}\n'
+        # Derselbe Faden zum selben Preis, aber weit weg - und mit der kleineren Nummer.
+        '{"id":0,"name":"Far Away","side":"both","zone":"Swamp of Sorrows","sells":['
+        '{"itemId":4000,"name":"Thread","price":10,"stack":1,"pricePerItem":10.0,"limited":false,"seenInForever":true}]}\n',
+        encoding="utf-8",
+    )
+    (directory / foreverdb_dump.RECIPES_FILE).write_text(
+        # Schwert aus 10 Stoff und 2 Faden, beim Lehrer gelernt.
+        recipe(
+            1, "Destiny", '{"itemId":647,"name":"Destiny","count":1,"quality":"Epic"}',
+            '[{"itemId":2589,"name":"Linen Cloth","count":10},{"itemId":4000,"name":"Thread","count":2}]',
+            '{"automatic":false,"trainer":{"cost":500,"trainers":1},"recipeItems":[],"sources":{"ways":["trainer"],"learnAtSkill":125,"trainerCost":550}}',
+        )
+        # Stoff, zwei bis vier Stueck je Durchgang, aus einer Zutat ohne Preis; gelernt aus einer Vorlage.
+        + recipe(
+            2, "Weave Linen", '{"itemId":2589,"name":"Linen Cloth","min":2,"max":4,"quality":"Common"}',
+            '[{"itemId":5000,"name":"Moonfiber","count":1}]',
+            '{"automatic":false,"trainer":null,"recipeItems":[{"itemId":4100,"name":"Plans: Destiny"}],"sources":{"ways":["vendor"],"learnAtSkill":120}}',
+        )
+        # Eine Verzauberung stellt nichts her, was sich verkaufen liesse.
+        + recipe(
+            3, "Enchant Blade", "null", '[{"itemId":2589,"name":"Linen Cloth","count":3}]',
+            '{"automatic":true,"trainer":null,"recipeItems":[],"sources":{"ways":[]}}',
+        )
+        # Dasselbe Rezept noch einmal unter einem zweiten Beruf: es bleibt eines.
+        + recipe(
+            3, "Enchant Blade", "null", '[{"itemId":2589,"name":"Linen Cloth","count":3}]',
+            '{"automatic":true,"trainer":null,"recipeItems":[],"sources":{"ways":[]}}',
+        ).replace('"profession":"blacksmithing","professionName":"Blacksmithing"', '"profession":"enchanting","professionName":"Enchanting"'),
+        encoding="utf-8",
+    )
+    result = db.build(filled)
+    assert result["counts"]["recipes"] == 3
+    assert result["counts"]["recipe_reagents"] == 4
+    assert result["counts"]["recipe_items"] == 1
+
+    assert rows(
+        filled,
+        "SELECT recipe_id, profession, category, skill, item_id, item_count, learned, trainer_cost, recipe_item_id "
+        "FROM recipes ORDER BY recipe_id",
+    ) == [
+        (1, "Blacksmithing", "Blades", 125, 647, 1.0, "trainer", 550, None),
+        (2, "Blacksmithing", "Blades", 120, 2589, 3.0, "recipe", None, 4100),
+        (3, "Blacksmithing", "Blades", 120, None, None, "automatic", None, None),
+    ]
+
+    assert rows(
+        filled,
+        "SELECT item_id, ah_price, vendor_price, buy_price, buy_source FROM item_prices ORDER BY item_id",
+    ) == [
+        (647, 450, None, 450.0, "ah"),
+        (2589, 24, 30.0, 24.0, "ah"),
+        (4000, None, 10.0, 10.0, "vendor"),
+        (4100, None, 150.0, 150.0, "vendor"),
+    ]
+    # Fuehren mehrere Haendler ein Item zum selben Preis, wird einer in einer Hauptstadt genannt.
+    assert rows(filled, "SELECT vendor, zone, n_vendors FROM vendor_prices WHERE item_id = 4000") == [
+        ("Horde Supplies", "Orgrimmar", 2)
+    ]
+
+    assert rows(
+        filled,
+        "SELECT item_id, count, unit_price, source, vendor, total FROM craft_reagents WHERE recipe_id = 1 ORDER BY item_id",
+    ) == [(2589, 10, 24.0, "ah", None, 240.0), (4000, 2, 10.0, "vendor", "Horde Supplies", 20.0)]
+
+    crafts = {
+        r[0]: r[1:]
+        for r in rows(
+            filled,
+            "SELECT recipe_id, reagents, unpriced, cost_known, cost, ah_price, profit, profit_pct, "
+            "recipe_price, recipe_source FROM crafts",
+        )
+    }
+    # Schwert: 10 * 24 + 2 * 10 = 260 Kosten, 450 * 0,95 = 427,5 Erloes -> 167,5 Gewinn.
+    assert crafts[1] == (2, 0, 260.0, 260.0, 450, 168.0, 64.0, None, None)
+    # Ohne Preis fuer die Zutat gibt es keine Kosten und keinen Gewinn - aber die Vorlage hat einen Preis.
+    assert crafts[2] == (1, 1, 0.0, None, 24, None, None, 150.0, "vendor")
+    # Die Verzauberung hat Kosten, aber nichts zu verkaufen.
+    assert crafts[3] == (1, 0, 72.0, 72.0, None, None, None, None, None)

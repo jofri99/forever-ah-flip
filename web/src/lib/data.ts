@@ -6,7 +6,16 @@ import {
 } from "hyparquet"
 import type { AsyncBuffer, FileMetaData } from "hyparquet"
 
-import type { Kind, MarketRow, Meta, Names, SeriesPoint, VendorFlip } from "./types"
+import type {
+  Craft,
+  CraftReagent,
+  Kind,
+  MarketRow,
+  Meta,
+  Names,
+  SeriesPoint,
+  VendorFlip,
+} from "./types"
 
 const DATA_URL = `${import.meta.env.BASE_URL}data/`
 
@@ -81,16 +90,31 @@ export async function loadMarket(meta: Meta): Promise<MarketRow[]> {
   return rows as MarketRow[]
 }
 
+/** Eine Datei, die es nur mit lokalem Abzug von ForeverDB gibt. Fehlt sie, ist die Liste leer. */
+async function loadOptional<T>(file: string, meta: Meta, present: boolean): Promise<T[]> {
+  if (!present) return []
+  const response = await fetch(versioned(file, meta))
+  if (!response.ok) return []
+  const rows = await parquetReadObjects({ file: await response.arrayBuffer() })
+  return rows as T[]
+}
+
 /**
  * Haendler-Flips gibt es nur, wenn lokal ein Abzug der Haendler vorliegt.
  * meta.json nennt dann ihre Zahl; sonst kommt eine leere Liste zurueck.
  */
-export async function loadVendorFlips(meta: Meta): Promise<VendorFlip[]> {
-  if (meta.vendor_flips == null) return []
-  const response = await fetch(versioned("vendor_flips.parquet", meta))
-  if (!response.ok) return []
-  const rows = await parquetReadObjects({ file: await response.arrayBuffer() })
-  return rows as VendorFlip[]
+export function loadVendorFlips(meta: Meta): Promise<VendorFlip[]> {
+  return loadOptional<VendorFlip>("vendor_flips.parquet", meta, meta.vendor_flips != null)
+}
+
+/** Rezepte mit Kosten und Gewinn - nur mit lokalem Abzug der Rezepte. */
+export function loadCrafts(meta: Meta): Promise<Craft[]> {
+  return loadOptional<Craft>("crafts.parquet", meta, meta.crafts != null)
+}
+
+/** Die Zutaten zu diesen Rezepten. */
+export function loadCraftReagents(meta: Meta): Promise<CraftReagent[]> {
+  return loadOptional<CraftReagent>("craft_reagents.parquet", meta, meta.crafts != null)
 }
 
 /** Namen sind optional. meta.json sagt, ob es die Datei gibt. */

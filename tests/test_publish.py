@@ -228,3 +228,65 @@ def test_vendor_flips_exist_only_with_a_local_vendor_dump(warehouse: Settings, t
     meta = publish.build(warehouse, out_dir=out)
     assert meta["vendor_flips"] is None
     assert not (out / publish.VENDOR_FLIPS).exists()
+
+
+def recipe_line(spell_id: int, name: str, item_id: int, count: int, reagents: str) -> str:
+    return (
+        f'{{"spellId":{spell_id},"name":"{name}","category":{{"id":1,"name":"Bars"}},"skill":{{"orange":50}},'
+        f'"makes":{{"itemId":{item_id},"name":"{name}","count":{count}}},"reagents":{reagents},'
+        '"learnedFrom":{"automatic":false,"trainer":{"cost":100,"trainers":2},"recipeItems":[],"sources":{"ways":["trainer"]}},'
+        '"newInForever":false,"profession":"mining","professionName":"Mining"}\n'
+    )
+
+
+def test_crafts_exist_only_with_a_local_recipe_dump(warehouse: Settings, tmp_path: Path) -> None:
+    out = tmp_path / "site"
+
+    # Ohne Abzug der Rezepte - so laeuft es in Actions - gibt es die Dateien nicht.
+    meta = publish.build(warehouse, out_dir=out)
+    assert meta["crafts"] is None
+    assert not (out / publish.CRAFTS).exists()
+    assert not (out / publish.CRAFT_REAGENTS).exists()
+
+    # Im Auktionshaus steht Item 100 fuer 550 und Item 300 fuer 99.
+    directory = foreverdb_dump.dump_dir(warehouse)
+    directory.mkdir(parents=True)
+    (directory / foreverdb_dump.RECIPES_FILE).write_text(
+        recipe_line(1, "Big Bar", 100, 1, '[{"itemId":300,"name":"Ore","count":3}]')
+        + recipe_line(2, "Ore Dust", 300, 5, '[{"itemId":100,"name":"Big Bar","count":1}]')
+        # Was dabei herauskommt, steht nicht im Auktionshaus: nichts fuer die Anzeige.
+        + recipe_line(3, "Unsold", 999, 1, '[{"itemId":300,"name":"Ore","count":1}]'),
+        encoding="utf-8",
+    )
+    meta = publish.build(warehouse, out_dir=out)
+    assert meta["crafts"] == 2
+
+    rows = query(
+        out / publish.CRAFTS,
+        "SELECT recipe_id, name, profession, category, skill, item_id, kind, item_count, reagents, unpriced, "
+        "cost, ah_price, profit, profit_pct, qty_sold_24h, learned, trainer_cost FROM FILE ORDER BY recipe_id",
+    )
+    assert rows == [
+        # 3 * 99 = 297 Kosten, 550 * 0,95 = 522,5 Erloes.
+        (1, "Big Bar", "Mining", "Bars", 50, 100, "auction", 1.0, 1, 0, 297.0, 550.0, 226.0, 76.0, 1.0, "trainer", 100.0),
+        # Fuenf Stueck je Durchgang: 5 * 99 * 0,95 = 470,25 Erloes gegen 550 Kosten - ein Verlust.
+        (2, "Ore Dust", "Mining", "Bars", 50, 300, "commodity", 5.0, 1, 0, 550.0, 99.0, -80.0, -15.0, 42.0, "trainer", 100.0),
+    ]
+    # In der Datei steht das lohnendste Rezept zuerst.
+    assert query(out / publish.CRAFTS, "SELECT recipe_id FROM FILE") == [(1,), (2,)]
+
+    assert query(
+        out / publish.CRAFT_REAGENTS,
+        "SELECT recipe_id, item_id, name, count, unit_price, source, vendor FROM FILE",
+    ) == [(1, 300, "Ore", 3, 99.0, "ah", None), (2, 100, "Big Bar", 1, 550.0, "ah", None)]
+
+    for file in (publish.CRAFTS, publish.CRAFT_REAGENTS):
+        types = dict(query(out / file, "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM FILE)"))
+        assert "BIGINT" not in types.values(), file
+
+    # Verschwindet der Abzug, darf keine veraltete Datei liegen bleiben.
+    (directory / foreverdb_dump.RECIPES_FILE).unlink()
+    meta = publish.build(warehouse, out_dir=out)
+    assert meta["crafts"] is None
+    assert not (out / publish.CRAFTS).exists()
+    assert not (out / publish.CRAFT_REAGENTS).exists()

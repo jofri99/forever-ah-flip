@@ -171,7 +171,8 @@ python -m collector foreverdb items --max-requests 50
 python -m collector foreverdb-details            # Details der Items, die Blizzard nicht kennt
 python -m collector foreverdb-details --scope market --max-requests 500
 python -m collector foreverdb-vendors            # alle Haendler samt Sortiment und Preisen
-python -m collector foreverdb-refresh            # Item-Liste, Haendler und Sortimente neu abziehen
+python -m collector foreverdb-recipes            # alle Berufe mit Rezepten, Zutaten und Lernquellen
+python -m collector foreverdb-refresh            # Item-Liste, Haendler, Sortimente und Rezepte neu abziehen
 ```
 
 Abgelegt wird unter `data/local/foreverdb/`, eine Zeile JSON je Eintrag. Der Abzug haelt
@@ -185,13 +186,17 @@ Abbruch dort weiter. Gemessen an der API:
   Lauf, was schon da ist. Fuer die rund 2.800 Luecken im Markt sind das gut 100 Minuten.
 - Nicht alles dort ist fuer Forever bestaetigt. Die Entzauberungs-Ergebnisse etwa tragen den
   Vermerk `Classic data (CMaNGOS), not confirmed in Forever`.
+- Rezepte gibt es je Beruf, 100 je Anfrage: was ein Rezept herstellt, die Zutaten mit Menge,
+  die Skill-Stufen und wie man es lernt (Lehrer mit Preis, Rezept-Item, Haendler, Beute).
+  `foreverdb-recipes` holt alle 2.493 Rezepte der 12 Berufe mit 33 Anfragen nach
+  `recipes.jsonl` und schreibt erst, wenn alles da ist.
 - Erlaubt sind 30 Anfragen je Minute und 5.000 am Tag.
 
-Nach einem neuen Spielstand aendern sich Items und Sortimente. `foreverdb-refresh` holt
-Item-Liste, Haendler und Sortimente neu - in einen eigenen Ordner, und tauscht erst aus, wenn
-alles vollstaendig da ist. Bis dahin, auch nach einem Abbruch, arbeiten Datenbank und
-Oberflaeche mit dem bisherigen Stand; ein erneuter Aufruf setzt fort. Rund 1.300 Anfragen,
-knapp 50 Minuten.
+Nach einem neuen Spielstand aendern sich Items, Sortimente und Rezepte. `foreverdb-refresh`
+holt Item-Liste, Haendler und Sortimente neu - in einen eigenen Ordner, und tauscht erst aus,
+wenn alles vollstaendig da ist. Bis dahin, auch nach einem Abbruch, arbeiten Datenbank und
+Oberflaeche mit dem bisherigen Stand; ein erneuter Aufruf setzt fort. Danach folgen die
+Rezepte. Rund 1.350 Anfragen, knapp 50 Minuten.
 
 Drei Regeln des Anbieters bestimmen, wohin diese Daten duerfen:
 
@@ -230,12 +235,30 @@ die Sichten aendern oder das Projekt in einen anderen Ordner zieht.
 | `blizzard_items` | Stammdaten aus Blizzards API, `raw` als JSON |
 | `foreverdb_items` | die Item-Liste von ForeverDB; weitere Listen als `foreverdb_vendors` usw. |
 | `foreverdb_item_details` | einzeln abgezogene Details: Haendlerpreis, Attribute, Bindung, Entzauberung |
+| `foreverdb_recipes` | die Rezepte der Berufe, wie ForeverDB sie liefert |
 | `vendor_items` | was welcher Haendler verkauft: Preis je Stueck, Fraktion, Zone, begrenzter Bestand |
 | `vendor_flips` | beim Haendler kaufen, im Auktionshaus verkaufen: Gewinn nach 5 % Gebuehr |
 | `items` | beide Quellen zusammengefuehrt: Blizzard gilt zuerst, ForeverDB fuellt auf - auch den Haendlerpreis |
 | `latest` | der juengste Stand mit Namen und Haendlerpreisen |
 | `history` | `snapshots` mit Namen und den Verkaeufen seit dem Stand davor |
 | `sold_daily` | Verkaeufe je Item und Tag, mit `hours_covered` |
+
+Fuers Herstellen gibt es ein eigenes kleines Modell. Ein Rezept stellt ein Item her, braucht
+Zutaten und wird irgendwo gelernt; jedes Item hat einen Preis:
+
+| Sicht | Inhalt |
+|---|---|
+| `recipes` | ein Rezept: Beruf, Gruppe, Skill, hergestelltes Item und Menge, Lernquelle (`learned`: `trainer`, `recipe`, `automatic`), Preis beim Lehrer |
+| `recipe_reagents` | die Zutaten: eine Zeile je Rezept und Item, mit Menge |
+| `recipe_items` | die Items, die ein Rezept lehren |
+| `ah_prices` | je Item das guenstigste Angebot im Auktionshaus und die Verkaeufe der letzten 24 Stunden |
+| `vendor_prices` | je Item der guenstigste Haendler, den die Horde erreicht und der unbegrenzt liefert |
+| `item_prices` | was ein Item kostet, wenn man es kaufen muss: `buy_price` und `buy_source` (`ah` oder `vendor`) |
+| `craft_reagents` | die Zutaten mit Preis je Stueck, Bezugsquelle und Summe |
+| `crafts` | je Rezept: Kosten der Zutaten, guenstigstes Angebot des Ergebnisses, Gewinn nach 5 % Gebuehr |
+
+Die Definitionen stehen in `collector/crafting.py` und gelten genauso beim Bauen der
+Anzeige-Dateien - die Oberflaeche und eine Abfrage rechnen also gleich.
 
 Dazu zwei Helfer: `money(123456)` ergibt `12g 34s 56c`, `gold(123456)` ergibt `12.35`.
 
@@ -253,6 +276,15 @@ SELECT name, item_subclass AS beruf, money(vendor_price) AS haendler, money(ah_p
        money(profit) AS gewinn, n_listings, limited, vendor, zone
 FROM vendor_flips WHERE item_class = 'Recipe' ORDER BY profit DESC;
 
+-- Was lohnt sich herzustellen? Nur Rezepte, deren Zutaten alle einen Preis haben.
+SELECT name, profession, skill, money(cost) AS zutaten, money(ah_price) AS ah,
+       money(profit) AS gewinn, profit_pct, qty_sold_24h
+FROM crafts WHERE profit > 0 ORDER BY profit DESC LIMIT 30;
+
+-- Die Rechnung eines Rezepts im Einzelnen
+SELECT name, count, money(unit_price) AS je_stueck, source, vendor, money(total) AS summe
+FROM craft_reagents WHERE recipe_id = 3451;
+
 -- In die vollstaendige Antwort greifen
 SELECT name, raw->>'$.preview_item.armor.value' AS armor
 FROM blizzard_items WHERE inventory_type = 'CHEST' AND quality = 'RARE';
@@ -263,6 +295,15 @@ Allianz bleiben aussen vor), und vergleicht mit dem guenstigsten Angebot im Aukt
 Drei Dinge sagt die Sicht nicht: ob der Haendler einen Ruf verlangt (`reputation` nennt nur
 die Fraktion), wie schnell ein begrenzter Bestand nachkommt, und ob sich das Item zu dem
 Preis auch verkauft - dafuer steht `sold_recently` daneben.
+
+`crafts` bewertet jede Zutat mit ihrem guenstigsten Preis: dem guenstigsten Angebot im
+Auktionshaus oder einem Haendler mit unbegrenztem Bestand, je nachdem, was weniger kostet.
+Hat eine Zutat gerade keinen Preis, bleiben `cost` und `profit` leer; `cost_known` nennt
+die Summe der uebrigen und `unpriced` ihre Zahl. `profit` gilt fuer einen Durchgang, also
+fuer `item_count` Stueck. Nicht eingerechnet sind das einmalige Lernen des Rezepts, die
+Einstellgebuehr, Abklingzeiten und die Frage, ob eine Zutat sich guenstiger selbst
+herstellen liesse. Und wie bei den Haendler-Flips: gerechnet wird gegen das guenstigste
+Angebot, nicht gegen einen Preis, zu dem sicher verkauft wird.
 
 Die Datei laesst sich auch mit DBeaver, der DuckDB-Kommandozeile oder einer
 DuckDB-Erweiterung fuer VS Code oeffnen. DuckDB erlaubt dabei nur ein Programm, das schreibt:
@@ -286,6 +327,8 @@ python -m collector publish --days 30
 | `meta.json` | Zeitraum, Anzahl Staende, Dateigroessen |
 | `names.json` | Item-ID zu Name, nur fuer Items im Zeitfenster |
 | `vendor_flips.parquet` | nur mit lokalem Abzug der Haendler: Items, die im Auktionshaus mehr bringen, als sie beim Haendler kosten |
+| `crafts.parquet` | nur mit lokalem Abzug der Rezepte: je Rezept, dessen Ergebnis im Auktionshaus steht, Kosten, Erloes und Gewinn |
+| `craft_reagents.parquet` | die Zutaten dieser Rezepte mit Preis und Bezugsquelle |
 
 Wer ein Item will, liest am Ende von `hourly.parquet` nach, in welcher Zeilengruppe es
 liegt, und holt nur die. Zeit steht als Unix-Sekunden drin, Preise als `DOUBLE` - beides
@@ -321,9 +364,17 @@ npm run dev                         # http://localhost:5173
   Verkaeufe der letzten 24 Stunden, Haendler und Zone. Zwei Schalter blenden begrenzten
   Bestand und Items ohne Verkaeufe aus. Den Reiter gibt es nur, wenn lokal ein Abzug der
   Haendler von ForeverDB vorliegt - auf einer oeffentlichen Seite also nicht.
+- Der Reiter **Crafting** zeigt, was sich herzustellen lohnt: Kosten der Zutaten,
+  guenstigstes Angebot des Ergebnisses, Gewinn je Durchgang nach 5 % Gebuehr, Angebote und
+  Verkaeufe. Filtern laesst sich nach Beruf und dessen Gruppen; zwei Schalter beschraenken
+  auf lohnende Rezepte und auf solche mit Verkaeufen. Auch diesen Reiter gibt es nur mit
+  lokalem Abzug von ForeverDB.
 - Ein Klick oder Enter auf einer Zeile oeffnet den Verlauf: guenstigster Preis, Median und
   darunter die verkaufte Menge je Stand - oder die Zahl der Angebote, solange es keine
   Verkaufsdaten gibt.
+- Laesst sich das Item herstellen, steht unter dem Verlauf die Rechnung: jede Zutat mit
+  Menge, Preis und der guenstigsten Bezugsquelle, darunter Kosten, Erloes und Gewinn. Ein
+  Klick auf eine Zutat oeffnet deren Verlauf.
 - Die Adresse merkt sich das Item (`#12359:commodity`). Ein Verlauf laesst sich verlinken,
   und die Zurueck-Taste schliesst ihn wieder.
 - Zeiten stehen in Ortszeit. Hell und dunkel folgen dem System, der Knopf oben rechts
@@ -334,7 +385,7 @@ web/src/
   lib/data.ts        liest meta.json, market.parquet und gezielt aus hourly.parquet
   lib/rows.ts        Filtern und Sortieren als reine Funktionen
   lib/format.ts      Gold/Silber/Kupfer, Prozente, Ortszeit fuer das Diagramm
-  components/        Markt- und Flip-Tabelle auf einer gemeinsamen virtuellen Tabelle,
+  components/        Markt-, Flip- und Rezept-Tabelle auf einer gemeinsamen virtuellen Tabelle,
                      Detailansicht, Diagramm; ui/ kommt von shadcn
   hooks/             das gewaehlte Item in der Adresse
 ```

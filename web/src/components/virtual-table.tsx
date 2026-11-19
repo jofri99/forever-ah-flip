@@ -26,7 +26,10 @@ export interface Column<T, K extends string = string> {
 interface VirtualTableProps<T, K extends string> {
   rows: T[]
   columns: Column<T, K>[]
+  /** Was ein Klick auswaehlt. Mehrere Zeilen duerfen dasselbe auswaehlen. */
   getKey: (row: T) => string
+  /** Eindeutig je Zeile, wo `getKey` es nicht ist - etwa zwei Rezepte fuer dasselbe Item. */
+  getRowId?: (row: T) => string
   sort: { key: K; dir: 1 | -1 }
   selectedKey: string | null
   onSort: (key: K) => void
@@ -44,6 +47,7 @@ export function VirtualTable<T, K extends string>({
   rows,
   columns,
   getKey,
+  getRowId,
   sort,
   selectedKey,
   onSort,
@@ -112,7 +116,7 @@ export function VirtualTable<T, K extends string>({
             const key = getKey(row)
             return (
               <TableRow
-                key={key}
+                key={getRowId ? getRowId(row) : key}
                 data-state={key === selectedKey ? "selected" : undefined}
                 tabIndex={0}
                 onClick={() => onSelect(key)}
