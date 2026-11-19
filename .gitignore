@@ -22,3 +22,6 @@ web/public/data/
 
 # Lokale Einstellungen von Claude Code
 .claude/
+
+# Entwurf der neuen Oberflaeche: enthaelt einen Datenauszug mit Daten von ForeverDB
+web/public/mockup/
