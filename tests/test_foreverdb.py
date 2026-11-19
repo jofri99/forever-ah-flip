@@ -295,11 +295,11 @@ def test_vendors_are_listed_then_fetched_with_the_alliance_last(tmp_path: Path, 
 
     foreverdb_dump.dump_list(client, "vendors", directory)
     # Gesammelt wird das Auktionshaus der Horde: deren Haendler und die neutralen zuerst.
-    assert foreverdb_dump.vendor_ids(settings) == [2, 3, 1]
+    assert foreverdb_dump.vendor_ids(directory) == [2, 3, 1]
 
     session.calls.clear()
     result = foreverdb_dump.dump_item_details(
-        client, foreverdb_dump.vendor_ids(settings), directory, kind="vendors"
+        client, foreverdb_dump.vendor_ids(directory), directory, kind="vendors"
     )
     assert [c["url"].rsplit("/", 2)[-2:] for c in session.calls] == [["vendors", "2"], ["vendors", "3"], ["vendors", "1"]]
     assert result["fetched"] == 3
@@ -307,3 +307,77 @@ def test_vendors_are_listed_then_fetched_with_the_alliance_last(tmp_path: Path, 
     # Die Details der Haendler liegen getrennt von denen der Items.
     assert foreverdb_dump.details_done(directory, "items") == set()
     assert (directory / foreverdb_dump.VENDOR_DETAILS_FILE).is_file()
+
+
+class FakeWorld(FakeCatalog):
+    """Items und Haendler zusammen, mit einer Version: nach einem neuen Build heisst alles anders."""
+
+    def __init__(self, version: str = "v1") -> None:
+        super().__init__(total=150)
+        self.version = version
+        self.fail_vendor: int | None = None
+
+    def get(self, url, params=None, timeout=None):
+        self.calls.append({"url": url, "params": dict(params or {})})
+        if url.endswith("/items"):
+            offset = int((params or {}).get("offset", 0))
+            rows = [{"id": i, "name": f"Item {i} {self.version}"} for i in range(offset + 1, min(offset + 100, 150) + 1)]
+            return FakeResponse(200, {"data": rows, "meta": {"total": 150}})
+        if url.endswith("/vendors"):
+            rows = [{"id": i, "name": f"Vendor {i}", "side": "Horde"} for i in (1, 2, 3)]
+            return FakeResponse(200, {"data": rows, "meta": {"total": 3}})
+        vendor_id = int(url.rsplit("/", 1)[1])
+        if vendor_id == self.fail_vendor:
+            return FakeResponse(402)
+        return FakeResponse(200, {"data": {"id": vendor_id, "name": f"Vendor {vendor_id} {self.version}", "sells": []}})
+
+
+def names_in(path: Path) -> list[str]:
+    return [json.loads(line)["name"] for line in path.read_text(encoding="utf-8").splitlines()]
+
+
+def test_refresh_keeps_the_old_files_until_everything_is_there(tmp_path: Path) -> None:
+    old = FakeWorld("v1")
+    client = make_client(old)
+    foreverdb_dump.dump_list(client, "items", tmp_path)
+    foreverdb_dump.dump_list(client, "vendors", tmp_path)
+    foreverdb_dump.dump_item_details(client, foreverdb_dump.vendor_ids(tmp_path), tmp_path, kind="vendors")
+    assert names_in(tmp_path / "items.jsonl")[0] == "Item 1 v1"
+
+    # Ein neuer Build. Das Kontingent reisst mitten in den Sortimenten ab.
+    new = FakeWorld("v2")
+    new.fail_vendor = 3
+    result = foreverdb_dump.refresh(make_client(new), tmp_path)
+
+    assert result["complete"] is False
+    assert "Tageskontingent" in result["stopped"]
+    # Die bisherigen Dateien sind unberuehrt und vollstaendig.
+    assert names_in(tmp_path / "items.jsonl")[0] == "Item 1 v1"
+    assert len(names_in(tmp_path / "items.jsonl")) == 150
+    assert names_in(tmp_path / foreverdb_dump.VENDOR_DETAILS_FILE) == ["Vendor 1 v1", "Vendor 2 v1", "Vendor 3 v1"]
+    assert (tmp_path / foreverdb_dump.REFRESH_DIR / "items.jsonl").is_file()
+
+    # Am naechsten Tag: nur der fehlende Haendler wird noch geholt, dann wird getauscht.
+    new.fail_vendor = None
+    new.calls.clear()
+    result = foreverdb_dump.refresh(make_client(new), tmp_path)
+
+    assert result["complete"] is True
+    assert [c["url"].rsplit("/", 1)[1] for c in new.calls] == ["3"]
+    assert names_in(tmp_path / "items.jsonl")[0] == "Item 1 v2"
+    assert names_in(tmp_path / foreverdb_dump.VENDOR_DETAILS_FILE) == ["Vendor 1 v2", "Vendor 2 v2", "Vendor 3 v2"]
+    assert not (tmp_path / foreverdb_dump.REFRESH_DIR).exists()
+    # Die Listen gelten als fertig: ein normaler Abzug holt nichts erneut.
+    new.calls.clear()
+    assert foreverdb_dump.dump_list(make_client(new), "items", tmp_path)["done"] and new.calls == []
+
+
+def test_refresh_does_not_touch_the_item_details(tmp_path: Path) -> None:
+    world = FakeWorld("v1")
+    (tmp_path / foreverdb_dump.DETAILS_FILE).write_text('{"id":7,"name":"kept"}\n', encoding="utf-8")
+
+    result = foreverdb_dump.refresh(make_client(world), tmp_path)
+
+    assert result["complete"] is True
+    assert foreverdb_dump.details_done(tmp_path, "items") == {7}
+    assert result["requests"] == 2 + 1 + 3        # zwei Seiten Items, eine Seite Haendler, drei Sortimente

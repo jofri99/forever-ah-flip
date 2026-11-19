@@ -171,6 +171,7 @@ python -m collector foreverdb items --max-requests 50
 python -m collector foreverdb-details            # Details der Items, die Blizzard nicht kennt
 python -m collector foreverdb-details --scope market --max-requests 500
 python -m collector foreverdb-vendors            # alle Haendler samt Sortiment und Preisen
+python -m collector foreverdb-refresh            # Item-Liste, Haendler und Sortimente neu abziehen
 ```
 
 Abgelegt wird unter `data/local/foreverdb/`, eine Zeile JSON je Eintrag. Der Abzug haelt
@@ -185,6 +186,12 @@ Abbruch dort weiter. Gemessen an der API:
 - Nicht alles dort ist fuer Forever bestaetigt. Die Entzauberungs-Ergebnisse etwa tragen den
   Vermerk `Classic data (CMaNGOS), not confirmed in Forever`.
 - Erlaubt sind 30 Anfragen je Minute und 5.000 am Tag.
+
+Nach einem neuen Spielstand aendern sich Items und Sortimente. `foreverdb-refresh` holt
+Item-Liste, Haendler und Sortimente neu - in einen eigenen Ordner, und tauscht erst aus, wenn
+alles vollstaendig da ist. Bis dahin, auch nach einem Abbruch, arbeiten Datenbank und
+Oberflaeche mit dem bisherigen Stand; ein erneuter Aufruf setzt fort. Rund 1.300 Anfragen,
+knapp 50 Minuten.
 
 Drei Regeln des Anbieters bestimmen, wohin diese Daten duerfen:
 
