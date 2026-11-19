@@ -2,18 +2,26 @@
 
     data/local/forever.duckdb
 
-Die Datei enthaelt keine Daten, nur Sichten. Jede Sicht schaut auf die Dateien,
-die ohnehin da sind - die Staende im Warehouse, die Stammdaten, den Abzug von
-ForeverDB. Nach einem `git pull` oder einem neuen Abzug ist die Datenbank
-deshalb ohne weiteres Zutun aktuell, und es gibt keine zweite Kopie, die
-veralten koennte.
+Zwei Arten von Daten, zwei Arten, sie zu halten:
 
-Neu gebaut werden muss sie nur, wenn sich die Sichten selbst aendern oder das
-Projekt in einen anderen Ordner zieht - die Pfade stehen in den Sichten.
+- Stammdaten - Items, Haendler und ihr Sortiment, Rezepte und ihre Zutaten -
+  aendern sich nur mit einem neuen Spielstand. Sie stehen als Tabellen mit
+  Schluesseln in der Datei; das Schema steht in schema.py.
+- Staende, Verkaeufe und alles, was am stuendlichen Preis haengt, bleiben Sichten
+  auf die Parquet-Dateien des Warehouse. Nach einem `git pull` sind sie ohne
+  weiteres Zutun aktuell.
+
+Die Tabellen sind eine Kopie und koennten veralten. Die Datei merkt sich deshalb,
+woraus sie gebaut wurde. `sql` baut sie neu, sobald sich eine Quelle geaendert hat,
+und die Abzugskommandos tun es am Ende von selbst. Wer die Datei mit einem anderen
+Werkzeug oeffnet, ruft nach einem Abzug oder `git pull` einmal `db` auf.
 """
 
 from __future__ import annotations
 
+import datetime as dt
+import hashlib
+import json
 import os
 import sys
 from pathlib import Path
@@ -21,7 +29,7 @@ from typing import Any
 
 import duckdb
 
-from . import crafting, foreverdb_dump, names, store
+from . import crafting, foreverdb_dump, names, schema, store
 from .config import Settings
 
 DB_NAME = "forever.duckdb"
@@ -207,7 +215,7 @@ def vendor_details_source(settings: Settings) -> str | None:
     )
 
 
-DERIVED = """
+MACROS = """
 -- Geldbetraege lesbar machen: money(123456) -> '12g 34s 56c', money(-250) -> '-2s 50c'
 CREATE OR REPLACE MACRO money(copper) AS
     CASE WHEN copper IS NULL THEN NULL ELSE
@@ -218,10 +226,15 @@ CREATE OR REPLACE MACRO money(copper) AS
     END;
 
 CREATE OR REPLACE MACRO gold(copper) AS round(copper / 10000.0, 2);
+"""
 
--- Ein Item, wie es beide Quellen zusammen beschreiben. Blizzard gilt zuerst,
--- ForeverDB fuellt auf, was Blizzard nicht kennt.
-CREATE OR REPLACE VIEW items AS
+# --- Stammdaten: womit die festen Tabellen gefuellt werden ---------------------------
+# Jede Abfrage liefert je Schluessel genau eine Zeile, auch wenn eine Quelle einen
+# Eintrag doppelt nennt. Sonst scheiterte der Bau an einem Primaerschluessel.
+
+# Ein Item, wie beide Quellen zusammen es beschreiben. Blizzard gilt zuerst,
+# ForeverDB fuellt auf, was Blizzard nicht kennt.
+ITEMS_SELECT = """
 SELECT coalesce(b.item_id, f.id)                       AS item_id,
        coalesce(b.name, f.name)                        AS name,
        upper(coalesce(b.quality, f.quality))           AS quality,
@@ -245,18 +258,25 @@ SELECT coalesce(b.item_id, f.id)                       AS item_id,
        f.id IS NOT NULL                                AS in_foreverdb,
        d.id IS NOT NULL                                AS has_details
 FROM blizzard_items b
-FULL OUTER JOIN foreverdb_items f ON f.id = b.item_id
-LEFT JOIN foreverdb_item_details d ON d.id = coalesce(b.item_id, f.id);
+FULL OUTER JOIN (
+    SELECT * FROM foreverdb_items WHERE id IS NOT NULL
+    QUALIFY row_number() OVER (PARTITION BY id ORDER BY name) = 1
+) f ON f.id = b.item_id
+LEFT JOIN (
+    SELECT * FROM foreverdb_item_details
+    QUALIFY row_number() OVER (PARTITION BY id ORDER BY sellPrice DESC NULLS LAST) = 1
+) d ON d.id = coalesce(b.item_id, f.id)"""
 
--- Was welcher Haendler verkauft: eine Zeile je Haendler und Item.
-CREATE OR REPLACE VIEW vendor_items AS
-SELECT v.id            AS vendor_id,
-       v.name          AS vendor,
-       v.title,
-       v.side,
-       v.zone,
-       v.x, v.y,
+VENDORS_SELECT = """
+SELECT v.id AS vendor_id, v.name, v.title, v.side, v.zone, v.x, v.y,
        v.reputationFaction.name AS reputation,
+       v.seenInForever          AS seen_in_forever
+FROM foreverdb_vendor_details v
+QUALIFY row_number() OVER (PARTITION BY v.id ORDER BY len(v.sells) DESC NULLS LAST) = 1"""
+
+# Fuehrt ein Haendler ein Item zweimal, gilt das guenstigere Angebot.
+STOCK_SELECT = """
+SELECT v.id            AS vendor_id,
        s.itemId        AS item_id,
        s.name          AS item_name,
        s.price,
@@ -266,8 +286,43 @@ SELECT v.id            AS vendor_id,
        s.limitedStockCount AS limited_stock,
        s.classicData   AS classic_data,
        s.seenInForever AS seen_in_forever
-FROM foreverdb_vendor_details v, unnest(v.sells) AS t(s);
+FROM foreverdb_vendor_details v, unnest(v.sells) AS t(s)
+WHERE s.itemId IS NOT NULL
+QUALIFY row_number() OVER (
+    PARTITION BY v.id, s.itemId ORDER BY s.pricePerItem NULLS LAST, s.price NULLS LAST
+) = 1"""
 
+# Zum Herstellen taugt ein Haendler, den die Horde erreicht und der unbegrenzt liefert.
+CRAFT_VENDORS = (
+    "SELECT * FROM vendor_items "
+    "WHERE side <> 'Alliance' AND price_per_item > 0 AND NOT coalesce(limited, false)"
+)
+
+
+def _static_selects() -> dict[str, str]:
+    """Tabelle -> Abfrage, die sie fuellt. Die Namen sind die aus schema.TABLES."""
+    return {
+        "items": ITEMS_SELECT,
+        "vendors": VENDORS_SELECT,
+        "vendor_stock": STOCK_SELECT,
+        "vendor_prices": crafting.vendor_prices_select(CRAFT_VENDORS),
+        **crafting.MODEL,
+    }
+
+
+# Was welcher Haendler verkauft, mit dem Haendler in jeder Zeile - bequemer abzufragen
+# als vendor_stock und vendors einzeln. Braucht nur die Tabellen, nicht ihren Inhalt.
+VENDOR_ITEMS_VIEW = """
+CREATE OR REPLACE VIEW vendor_items AS
+SELECT s.vendor_id, v.name AS vendor, v.title, v.side, v.zone, v.x, v.y, v.reputation,
+       s.item_id, s.item_name, s.price, s.stack, s.price_per_item,
+       s.limited, s.limited_stock, s.classic_data, s.seen_in_forever
+FROM vendor_stock s
+JOIN vendors v USING (vendor_id);
+"""
+
+# --- Sichten: alles, was am stuendlichen Stand haengt -------------------------------
+VIEWS = """
 -- Der juengste Stand, mit Namen und Haendlerpreisen.
 CREATE OR REPLACE VIEW latest AS
 SELECT s.snapshot_ts, s.house, s.item_id, i.name, i.quality, s.kind,
@@ -347,11 +402,55 @@ WHERE l.min_price > 0
 QUALIFY row_number() OVER (PARTITION BY l.item_id ORDER BY l.min_price, l.kind) = 1;
 """
 
-# Zum Herstellen taugt ein Haendler, den die Horde erreicht und der unbegrenzt liefert.
-CRAFT_VENDORS = (
-    "SELECT * FROM vendor_items "
-    "WHERE side <> 'Alliance' AND price_per_item > 0 AND NOT coalesce(limited, false)"
-)
+
+def _schema_version() -> str:
+    """Aendert sich, sobald sich eine Tabelle, eine Abfrage oder eine Sicht aendert."""
+    parts = [
+        *schema.TABLES.values(), schema.BUILD_INFO, MACROS, *_static_selects().values(),
+        VENDOR_ITEMS_VIEW, VIEWS, crafting.costs_sql("VIEW"), crafting.RECIPE_COLUMNS,
+        json.dumps(EMPTY, sort_keys=True),
+    ]
+    return hashlib.sha1("\n".join(parts).encode("utf-8")).hexdigest()[:12]
+
+
+def fingerprint(settings: Settings) -> str:
+    """Woraus die Datei gebaut wird: Schema, Ordner und die Dateien der Stammdaten.
+
+    Stimmt der Wert nicht mehr mit dem ueberein, der in der Datei steht, sind ihre
+    Tabellen veraltet. Die Staende zaehlen nicht mit - auf die schauen Sichten.
+    """
+    entries: list[list[Any]] = [["schema", _schema_version()], ["data", settings.data_dir.as_posix()]]
+    sources = [
+        ("foreverdb", foreverdb_dump.dump_dir(settings), "*.jsonl"),
+        ("ref", names.ref_dir(settings.warehouse_dir), "dt=*.parquet"),
+    ]
+    for label, directory, pattern in sources:
+        for file in sorted(directory.glob(pattern)) if directory.is_dir() else []:
+            stat = file.stat()
+            entries.append([f"{label}/{file.name}", stat.st_size, stat.st_mtime_ns])
+    # Fehlt ein Datensatz beim Bau, steht an seiner Stelle eine leere Sicht.
+    for dataset in (store.ITEMS, store.SALES, store.RUNS):
+        base = settings.warehouse_dir / dataset
+        entries.append([dataset, base.is_dir() and next(base.glob("house=*/dt=*/*.parquet"), None) is not None])
+    return json.dumps(entries, separators=(",", ":"))
+
+
+def is_stale(settings: Settings) -> bool:
+    """Fehlt die Datei, oder haben sich die Stammdaten seit dem Bau geaendert?"""
+    path = db_path(settings)
+    if not path.is_file():
+        return True
+    try:
+        con = duckdb.connect(str(path), read_only=True)
+    except duckdb.Error:
+        return False        # gerade woanders geoeffnet: neu bauen ginge ohnehin nicht
+    try:
+        row = con.execute("SELECT sources FROM build_info").fetchone()
+    except duckdb.Error:
+        return True         # eine Datei aus der Zeit vor den Tabellen
+    finally:
+        con.close()
+    return row is None or row[0] != fingerprint(settings)
 
 
 def build(settings: Settings) -> dict[str, Any]:
@@ -360,9 +459,11 @@ def build(settings: Settings) -> dict[str, Any]:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_name(path.name + ".tmp")
     temporary.unlink(missing_ok=True)
+    sources = fingerprint(settings)
 
     con = duckdb.connect(str(temporary))
     try:
+        # 1. Sichten auf die Dateien, wie sie sind.
         warehouse = settings.warehouse_dir
         present = {
             "snapshots": _warehouse_view(con, "snapshots", warehouse, store.ITEMS),
@@ -376,20 +477,46 @@ def build(settings: Settings) -> dict[str, Any]:
         present.setdefault("foreverdb_item_details", False)
         present.setdefault("foreverdb_vendor_details", False)
         present.setdefault("foreverdb_recipes", False)
-        con.execute(DERIVED)
-        # Rezepte, Zutaten, Preise und die Rechnung dazu - dieselben Definitionen,
-        # mit denen auch die Anzeige-Dateien gebaut werden.
-        con.execute(crafting.vendor_prices_sql("CREATE OR REPLACE VIEW", CRAFT_VENDORS))
-        con.execute(crafting.model_sql("CREATE OR REPLACE VIEW"))
+        con.execute(MACROS)
+
+        # 2. Die Stammdaten in feste Tabellen. Erst alle anlegen, dann in derselben
+        #    Reihenfolge fuellen: so steht der Kopf vor den Zeilen, die auf ihn verweisen.
+        for ddl in schema.TABLES.values():
+            con.execute(ddl)
+        con.execute(schema.BUILD_INFO)
+        con.execute(VENDOR_ITEMS_VIEW)
+        selects = _static_selects()
+        for name in schema.TABLES:
+            con.execute(f"INSERT INTO {name} BY NAME {selects[name]}")
+        con.execute(
+            "INSERT INTO build_info VALUES (?, ?)",
+            [dt.datetime.now(dt.timezone.utc).replace(tzinfo=None), sources],
+        )
+
+        # 3. Was am stuendlichen Stand haengt, als Sichten darueber - mit denselben
+        #    Definitionen, mit denen auch die Anzeige-Dateien gebaut werden.
+        con.execute(VIEWS)
         con.execute(crafting.costs_sql("CREATE OR REPLACE VIEW"))
 
+        tables = list(schema.TABLES)
         views = [
             row[0]
             for row in con.execute(
                 "SELECT view_name FROM duckdb_views() WHERE NOT internal ORDER BY view_name"
             ).fetchall()
         ]
-        counts = {view: con.execute(f"SELECT count(*) FROM {view}").fetchone()[0] for view in views}
+        counts = {
+            name: con.execute(f"SELECT count(*) FROM {name}").fetchone()[0]
+            for name in sorted(tables + views)
+        }
+        # Verweise auf Items, die die Item-Tabelle nicht kennt (siehe schema.py).
+        dangling = {
+            f"{table}.{column}": con.execute(
+                f"SELECT count(DISTINCT {column}) FROM {table} "
+                f"WHERE {column} IS NOT NULL AND {column} NOT IN (SELECT item_id FROM items)"
+            ).fetchone()[0]
+            for table, column in schema.ITEM_REFERENCES
+        }
     finally:
         con.close()
 
@@ -400,7 +527,22 @@ def build(settings: Settings) -> dict[str, Any]:
         raise RuntimeError(
             f"{path} ist gerade in einem anderen Programm geoeffnet. Dort schliessen und erneut bauen."
         ) from exc
-    return {"path": path, "counts": counts, "present": present}
+    return {"path": path, "counts": counts, "present": present, "tables": tables, "dangling": dangling}
+
+
+def refresh(settings: Settings) -> str | None:
+    """Baut die Datei neu, wenn es sie gibt und ihre Stammdaten veraltet sind.
+
+    Gibt einen Satz dazu zurueck, oder None, wenn nichts zu tun war. Wer die
+    Datenbank nie gebaut hat, bekommt hier auch keine.
+    """
+    if not db_path(settings).is_file() or not is_stale(settings):
+        return None
+    try:
+        build(settings)
+    except RuntimeError as exc:
+        return f"Die Datenbank ist veraltet, liess sich aber nicht neu bauen: {exc}"
+    return "Die Stammdaten haben sich geaendert - Datenbank neu gebaut."
 
 
 def query(settings: Settings, sql: str, max_rows: int = 50) -> None:
@@ -408,6 +550,9 @@ def query(settings: Settings, sql: str, max_rows: int = 50) -> None:
     path = db_path(settings)
     if not path.is_file():
         raise RuntimeError(f"{path} gibt es noch nicht. Erst `python -m collector db` ausfuehren.")
+    note = refresh(settings)
+    if note:
+        print(note, file=sys.stderr)
     # Die Tabellenlinien sind keine ASCII-Zeichen; die Windows-Konsole braucht UTF-8.
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -425,7 +570,17 @@ def main(settings: Settings) -> int:
         print(exc, file=sys.stderr)
         return 1
     print(f"{result['path']}")
-    for view, count in result["counts"].items():
-        note = "" if result["present"].get(view, True) else "  (Quelle fehlt noch)"
-        print(f"  {view:<17} {count:>10,} Zeilen{note}")
+    tables = set(result["tables"])
+    for title, wanted in (("Tabellen (Stammdaten)", True), ("Sichten", False)):
+        print(title)
+        for name, count in result["counts"].items():
+            if (name in tables) is not wanted:
+                continue
+            note = "" if result["present"].get(name, True) else "  (Quelle fehlt noch)"
+            print(f"  {name:<24} {count:>10,} Zeilen{note}")
+    dangling = {reference: count for reference, count in result["dangling"].items() if count}
+    if dangling:
+        print("Verweise auf Items, die die Item-Tabelle nicht kennt:")
+        for reference, count in dangling.items():
+            print(f"  {reference:<24} {count:>10,}")
     return 0

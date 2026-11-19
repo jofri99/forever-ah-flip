@@ -82,7 +82,7 @@ def rows(settings: Settings, sql: str) -> list[tuple]:
         con.close()
 
 
-def test_build_creates_views_over_every_dataset(filled: Settings) -> None:
+def test_build_creates_tables_and_views_over_every_dataset(filled: Settings) -> None:
     result = db.build(filled)
 
     assert result["path"] == filled.local_dir / "forever.duckdb"
@@ -109,8 +109,102 @@ def test_build_creates_views_over_every_dataset(filled: Settings) -> None:
         "vendor_flips": 0,
         "vendor_items": 0,
         "vendor_prices": 0,
+        "vendor_stock": 0,
+        "vendors": 0,
     }
     assert result["present"]["runs"] is False
+
+
+def test_reference_data_lives_in_tables_with_keys(filled: Settings) -> None:
+    result = db.build(filled)
+
+    # Stammdaten sind Tabellen, in der Reihenfolge des Schemas ...
+    assert result["tables"] == [
+        "items", "vendors", "vendor_stock", "vendor_prices", "recipes", "recipe_reagents", "recipe_items",
+    ]
+    kinds = dict(
+        rows(filled, "SELECT table_name, table_type FROM information_schema.tables WHERE table_schema = 'main'")
+    )
+    assert {kinds[name] for name in result["tables"]} == {"BASE TABLE"}
+    # ... und alles, was am stuendlichen Stand haengt, bleibt eine Sicht.
+    assert {kinds[name] for name in ("snapshots", "latest", "ah_prices", "item_prices", "crafts", "vendor_flips")} == {"VIEW"}
+
+    keys = rows(
+        filled,
+        "SELECT table_name, constraint_type, constraint_column_names FROM duckdb_constraints() "
+        "WHERE constraint_type IN ('PRIMARY KEY', 'FOREIGN KEY') ORDER BY ALL",
+    )
+    assert keys == [
+        ("items", "PRIMARY KEY", ["item_id"]),
+        ("recipe_items", "FOREIGN KEY", ["recipe_id"]),
+        ("recipe_items", "PRIMARY KEY", ["recipe_id", "item_id"]),
+        ("recipe_reagents", "FOREIGN KEY", ["recipe_id"]),
+        ("recipe_reagents", "PRIMARY KEY", ["recipe_id", "item_id"]),
+        ("recipes", "PRIMARY KEY", ["recipe_id"]),
+        ("vendor_prices", "PRIMARY KEY", ["item_id"]),
+        ("vendor_stock", "FOREIGN KEY", ["vendor_id"]),
+        ("vendor_stock", "PRIMARY KEY", ["vendor_id", "item_id"]),
+        ("vendors", "PRIMARY KEY", ["vendor_id"]),
+    ]
+
+
+def test_tables_are_rebuilt_once_the_reference_data_changed(
+    filled: Settings, capfd: pytest.CaptureFixture[str]
+) -> None:
+    db.build(filled)
+    assert db.is_stale(filled) is False
+    assert db.refresh(filled) is None
+
+    # Ein neues Item in der Liste von ForeverDB - etwa nach foreverdb-refresh.
+    with open(foreverdb_dump.dump_dir(filled) / "items.jsonl", "a", encoding="utf-8") as handle:
+        handle.write('{"id":9000,"name":"New Thing","quality":"Rare","class":"Miscellaneous","subclass":"Junk"}\n')
+    assert db.is_stale(filled) is True
+    # Die Tabelle ist eine Kopie und kennt es noch nicht ...
+    assert rows(filled, "SELECT count(*) FROM items WHERE item_id = 9000") == [(0,)]
+
+    # ... bis zur naechsten Abfrage ueber `sql`: die baut zuerst neu und sagt das.
+    db.query(filled, "SELECT name FROM items WHERE item_id = 9000")
+    captured = capfd.readouterr()
+    assert "New Thing" in captured.out
+    assert "neu gebaut" in captured.err
+    assert db.is_stale(filled) is False
+
+    # Wer die Datenbank nie gebaut hat, bekommt durch einen Abzug auch keine.
+    db.db_path(filled).unlink()
+    assert db.refresh(filled) is None
+    assert not db.db_path(filled).exists()
+
+
+def test_duplicates_in_the_sources_do_not_break_the_keys(filled: Settings) -> None:
+    directory = foreverdb_dump.dump_dir(filled)
+    # Das Schwert steht zweimal in der Item-Liste, derselbe Haendler zweimal in der Datei,
+    # er fuehrt den Stoff zweimal, und ein Rezept nennt dieselbe Zutat zweimal.
+    with open(directory / "items.jsonl", "a", encoding="utf-8") as handle:
+        handle.write('{"id":647,"name":"Destiny","quality":"Epic","class":"Weapon","subclass":"Sword"}\n')
+    vendor = (
+        '{"id":1,"name":"Twice","side":"Horde","zone":"Orgrimmar","sells":['
+        '{"itemId":2589,"name":"Linen Cloth","price":5,"stack":1,"pricePerItem":5.0,"limited":false},'
+        '{"itemId":2589,"name":"Linen Cloth","price":3,"stack":1,"pricePerItem":3.0,"limited":false}]}\n'
+    )
+    (directory / foreverdb_dump.VENDOR_DETAILS_FILE).write_text(vendor + vendor, encoding="utf-8")
+    (directory / foreverdb_dump.RECIPES_FILE).write_text(
+        recipe(
+            1, "Destiny", '{"itemId":647,"name":"Destiny","count":1}',
+            '[{"itemId":2589,"name":"Linen Cloth","count":2},{"itemId":2589,"name":"Linen Cloth","count":3}]',
+            '{"automatic":false,"trainer":null,"recipeItems":[{"itemId":647,"name":"Destiny"},{"itemId":647,"name":"Destiny"}],"sources":{"ways":[]}}',
+        ),
+        encoding="utf-8",
+    )
+
+    db.build(filled)
+
+    assert rows(filled, "SELECT count(*) FROM items WHERE item_id = 647") == [(1,)]
+    assert rows(filled, "SELECT vendor_id, name FROM vendors") == [(1, "Twice")]
+    # Vom doppelt gefuehrten Stoff gilt das guenstigere Angebot.
+    assert rows(filled, "SELECT vendor_id, item_id, price_per_item FROM vendor_stock") == [(1, 2589, 3.0)]
+    # Die Mengen derselben Zutat zaehlen zusammen.
+    assert rows(filled, "SELECT recipe_id, item_id, count FROM recipe_reagents") == [(1, 2589, 5)]
+    assert rows(filled, "SELECT recipe_id, item_id FROM recipe_items") == [(1, 647)]
 
 
 def test_items_prefers_blizzard_and_fills_gaps_from_foreverdb(filled: Settings) -> None:
@@ -173,6 +267,8 @@ def test_views_follow_new_files_without_rebuilding(filled: Settings) -> None:
     # Kein neuer Aufruf von build: die Sicht schaut auf den Ordner, nicht auf eine Kopie.
     assert rows(filled, "SELECT count(*) FROM snapshots") == [(5,)]
     assert rows(filled, "SELECT item_id, min_price FROM latest") == [(2589, 20)]
+    # Ein neuer Stand macht die Tabellen der Stammdaten nicht alt.
+    assert db.is_stale(filled) is False
 
 
 def test_build_works_with_nothing_collected_yet(settings: Settings) -> None:
@@ -319,6 +415,15 @@ def test_crafts_price_every_reagent_at_the_cheaper_source(filled: Settings) -> N
         encoding="utf-8",
     )
     result = db.build(filled)
+    # Faden, Vorlage und die Zutat ohne Preis stehen in keiner Item-Liste. Das darf sein
+    # und wird gezaehlt, statt den Bau scheitern zu lassen.
+    assert result["dangling"] == {
+        "vendor_stock.item_id": 2,
+        "recipes.item_id": 0,
+        "recipes.recipe_item_id": 1,
+        "recipe_reagents.item_id": 2,
+        "recipe_items.item_id": 1,
+    }
     assert result["counts"]["recipes"] == 3
     assert result["counts"]["recipe_reagents"] == 4
     assert result["counts"]["recipe_items"] == 1

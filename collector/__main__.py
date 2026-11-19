@@ -63,7 +63,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     refresh.add_argument("--max-requests", type=int, default=None, help="hoechstens so viele Anfragen")
 
-    sub.add_parser("db", help="baut die lokale DuckDB-Datei mit Sichten auf alle Daten")
+    sub.add_parser(
+        "db", help="baut die lokale DuckDB-Datei: Stammdaten als Tabellen, Staende als Sichten"
+    )
 
     sql = sub.add_parser("sql", help="fuehrt eine Abfrage gegen die lokale Datenbank aus")
     sql.add_argument("query", nargs="?", default=None, help="SQL; ohne Angabe wird --file gelesen")
@@ -76,6 +78,16 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--house", type=int, default=None, help="Auktionshaus (Vorgabe 114)")
 
     return parser
+
+
+def _after_dump(config, code: int) -> int:
+    """Nach einem Abzug die Tabellen der lokalen Datenbank nachziehen, wenn es sie gibt."""
+    from . import db as db_module
+
+    note = db_module.refresh(config)
+    if note:
+        print(note)
+    return code
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -108,9 +120,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"Unbekannte Liste: {', '.join(unknown)}. Moeglich: {', '.join(foreverdb_dump.LISTS)}", file=sys.stderr)
             return 2
         try:
-            return foreverdb_dump.main(
+            return _after_dump(config, foreverdb_dump.main(
                 config, args.lists, max_requests=args.max_requests, restart=args.restart
-            )
+            ))
         except ForeverDBError as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -120,7 +132,7 @@ def main(argv: list[str] | None = None) -> int:
         from .foreverdb import ForeverDBError
 
         try:
-            return foreverdb_dump.refresh_main(config, max_requests=args.max_requests)
+            return _after_dump(config, foreverdb_dump.refresh_main(config, max_requests=args.max_requests))
         except (ForeverDBError, RuntimeError) as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -130,7 +142,7 @@ def main(argv: list[str] | None = None) -> int:
         from .foreverdb import ForeverDBError
 
         try:
-            return foreverdb_dump.recipes_main(config, max_requests=args.max_requests)
+            return _after_dump(config, foreverdb_dump.recipes_main(config, max_requests=args.max_requests))
         except (ForeverDBError, RuntimeError) as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -140,7 +152,7 @@ def main(argv: list[str] | None = None) -> int:
         from .foreverdb import ForeverDBError
 
         try:
-            return foreverdb_dump.vendors_main(config, max_requests=args.max_requests)
+            return _after_dump(config, foreverdb_dump.vendors_main(config, max_requests=args.max_requests))
         except (ForeverDBError, RuntimeError) as exc:
             print(exc, file=sys.stderr)
             return 2
@@ -150,12 +162,14 @@ def main(argv: list[str] | None = None) -> int:
         from .foreverdb import ForeverDBError
 
         try:
-            return foreverdb_dump.details_main(config, scope=args.scope, max_requests=args.max_requests)
+            return _after_dump(
+                config, foreverdb_dump.details_main(config, scope=args.scope, max_requests=args.max_requests)
+            )
         except (ForeverDBError, RuntimeError) as exc:
             print(exc, file=sys.stderr)
             return 2
 
-    # Die Datenbank schaut nur auf vorhandene Dateien und braucht keine Zugangsdaten.
+    # Die Datenbank liest nur vorhandene Dateien und braucht keine Zugangsdaten.
     if args.command == "db":
         from . import db as db_module
 

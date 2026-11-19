@@ -6,20 +6,21 @@ Rezept). Daraus entstehen hier die Tabellen, mit denen sich rechnen laesst:
     recipes          ein Rezept: Beruf, Skill, was es herstellt, wie man es lernt
     recipe_reagents  die Zutaten eines Rezepts mit Menge
     recipe_items     die Items, die ein Rezept lehren
+    vendor_prices    je Item der guenstigste erreichbare Haendler
     item_prices      was ein Item kostet, wenn man es kaufen muss
     craft_reagents   die Zutaten mit Preis und Bezugsquelle
     crafts           je Rezept: Kosten, Erloes, Gewinn
 
-Dieselben Definitionen gelten an zwei Stellen: in der lokalen Datenbank als
-Sichten und beim Bauen der Anzeige-Dateien als Tabellen. Wer sie benutzt, stellt
-drei Dinge bereit und bekommt den Rest:
+Die ersten vier sind Stammdaten, die letzten drei haengen am stuendlichen Preis.
+Dieselben Abfragen gelten an zwei Stellen. Die lokale Datenbank legt die
+Stammdaten in feste Tabellen (schema.py) und die Rechnung als Sichten darueber.
+Beim Bauen der Anzeige-Dateien entsteht beides als Tabellen fuer diesen einen
+Lauf. Wer rechnen will, stellt zwei Dinge bereit:
 
     foreverdb_recipes  die Rezepte, wie `recipes_source` sie liest
     ah_prices          je Item das guenstigste Angebot im Auktionshaus:
                        item_id, kind, ah_price, n_listings, qty_sold_24h,
                        sales_hours_24h, item_class, item_subclass
-    vendor_prices      je Item der guenstigste erreichbare Haendler mit
-                       unbegrenztem Bestand - siehe `vendor_prices_sql`
 """
 
 from __future__ import annotations
@@ -66,7 +67,7 @@ def recipes_source(settings: Settings) -> str | None:
     )
 
 
-def vendor_prices_sql(create: str, offers: str) -> str:
+def vendor_prices_select(offers: str) -> str:
     """Je Item der guenstigste Haendler und wie viele es insgesamt fuehren.
 
     `offers` ist eine Abfrage mit item_id, price_per_item, vendor, zone und vendor_id,
@@ -74,27 +75,18 @@ def vendor_prices_sql(create: str, offers: str) -> str:
     """
     hubs = ", ".join(f"'{zone}'" for zone in HUBS)
     return f"""
-{create} vendor_prices AS
 SELECT item_id, price_per_item AS vendor_price, vendor, zone,
        count(*) OVER (PARTITION BY item_id) AS n_vendors
 FROM ({offers})
 QUALIFY row_number() OVER (
     PARTITION BY item_id
     ORDER BY price_per_item, coalesce(zone IN ({hubs}), false) DESC, vendor_id
-) = 1;
-"""
+) = 1"""
 
 
-def model_sql(create: str) -> str:
-    """Rezepte, Zutaten und Rezept-Items aus `foreverdb_recipes`.
-
-    `create` ist der Anfang der Anweisung: "CREATE OR REPLACE VIEW" in der
-    Datenbank, "CREATE OR REPLACE TEMP TABLE" beim Bauen der Anzeige-Dateien.
-    """
-    return f"""
--- Ein Rezept: was es herstellt, was man dafuer koennen muss und wie man es lernt.
--- `item_id` fehlt bei Rezepten, die nichts Handelbares herstellen (Verzauberungen).
-{create} recipes AS
+# Ein Rezept: was es herstellt, was man dafuer koennen muss und wie man es lernt.
+# `item_id` fehlt bei Rezepten, die nichts Handelbares herstellen (Verzauberungen).
+RECIPES_SELECT = """
 SELECT r.spellId                                             AS recipe_id,
        r.name,
        coalesce(r.professionName, r.profession)              AS profession,
@@ -121,24 +113,49 @@ SELECT r.spellId                                             AS recipe_id,
        r.learnedFrom.sources.ways                            AS ways,
        coalesce(r.newInForever, false)                       AS new_in_forever,
        r.url
-FROM foreverdb_recipes r;
+FROM foreverdb_recipes r"""
 
--- Die Zutaten: eine Zeile je Rezept und Item.
-{create} recipe_reagents AS
-SELECT r.spellId AS recipe_id, g.itemId AS item_id, g.name, g.count
+# Die Zutaten: eine Zeile je Rezept und Item. Nennt ein Rezept dasselbe Item
+# zweimal, zaehlen die Mengen zusammen.
+REAGENTS_SELECT = """
+SELECT r.spellId AS recipe_id, g.itemId AS item_id, any_value(g.name) AS name,
+       sum(g.count)::INTEGER AS count
 FROM foreverdb_recipes r, unnest(r.reagents) AS t(g)
-WHERE g.itemId IS NOT NULL;
+WHERE g.itemId IS NOT NULL
+GROUP BY r.spellId, g.itemId"""
 
--- Die Items, die ein Rezept lehren. Ein Rezept kann mehrere haben, viele haben keins.
-{create} recipe_items AS
-SELECT r.spellId AS recipe_id, i.itemId AS item_id, i.name
+# Die Items, die ein Rezept lehren. Ein Rezept kann mehrere haben, viele haben keins.
+RECIPE_ITEMS_SELECT = """
+SELECT r.spellId AS recipe_id, i.itemId AS item_id, any_value(i.name) AS name
 FROM foreverdb_recipes r, unnest(r.learnedFrom.recipeItems) AS t(i)
-WHERE i.itemId IS NOT NULL;
-"""
+WHERE i.itemId IS NOT NULL
+GROUP BY r.spellId, i.itemId"""
+
+# Tabelle -> Abfrage, die sie aus `foreverdb_recipes` fuellt.
+MODEL: dict[str, str] = {
+    "recipes": RECIPES_SELECT,
+    "recipe_reagents": REAGENTS_SELECT,
+    "recipe_items": RECIPE_ITEMS_SELECT,
+}
+
+
+def model_sql(create: str, offers: str) -> str:
+    """Legt vendor_prices, recipes, recipe_reagents und recipe_items in einem Zug an.
+
+    Fuer das Bauen der Anzeige-Dateien, mit `create` = "CREATE OR REPLACE TEMP TABLE".
+    Die lokale Datenbank legt dieselben Abfragen in feste Tabellen (siehe schema.py).
+    """
+    statements = [f"{create} vendor_prices AS {vendor_prices_select(offers)};"]
+    statements += [f"{create} {name} AS {select};" for name, select in MODEL.items()]
+    return "\n".join(statements)
 
 
 def costs_sql(create: str) -> str:
-    """Preise und Rechnung. Setzt recipes, recipe_reagents, ah_prices und vendor_prices voraus."""
+    """Preise und Rechnung. Setzt recipes, recipe_reagents, ah_prices und vendor_prices voraus.
+
+    `create` ist der Anfang der Anweisung: "CREATE OR REPLACE VIEW" in der Datenbank,
+    "CREATE OR REPLACE TEMP TABLE" beim Bauen der Anzeige-Dateien.
+    """
     keep = 1 - AH_CUT
     cheaper_at_vendor = "v.vendor_price IS NOT NULL AND (a.ah_price IS NULL OR v.vendor_price <= a.ah_price)"
     return f"""

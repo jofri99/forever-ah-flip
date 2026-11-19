@@ -213,7 +213,7 @@ ist - in Actions also nie. Die oeffentliche Seite zeigt damit nur Blizzards Name
 ### Lokale Datenbank
 
 Staende, Stammdaten und der Abzug von ForeverDB liegen in verschiedenen Formaten an
-verschiedenen Orten. `db` legt eine DuckDB-Datei darueber, in der sich alles mit SQL
+verschiedenen Orten. `db` baut daraus eine DuckDB-Datei, in der sich alles mit SQL
 verknuepfen laesst:
 
 ```powershell
@@ -222,43 +222,62 @@ python -m collector sql "SELECT * FROM latest LIMIT 10"  # Abfrage ohne weiteres
 python -m collector sql --file abfrage.sql --rows 200
 ```
 
-Die Datei enthaelt keine Daten, nur Sichten auf die vorhandenen Dateien. Nach einem
-`git -C data/warehouse pull` oder einem neuen Abzug ist sie deshalb ohne Neubau aktuell, und
-es gibt keine zweite Kopie, die veralten koennte. Neu gebaut werden muss sie nur, wenn sich
-die Sichten aendern oder das Projekt in einen anderen Ordner zieht.
+Zwei Arten von Daten, zwei Arten, sie zu halten:
+
+- **Stammdaten** aendern sich nur mit einem neuen Spielstand: Items, Haendler und ihr
+  Sortiment, Rezepte und ihre Zutaten. Sie stehen als Tabellen mit Schluesseln in der Datei.
+  Das Schema steht in `collector/schema.py`.
+- **Staende, Verkaeufe und Preise** aendern sich stuendlich. Sie bleiben in den
+  Parquet-Dateien des Warehouse, und die Datenbank schaut mit Sichten darauf. Nach einem
+  `git -C data/warehouse pull` sind sie ohne Neubau aktuell.
+
+```
+items ─┬─< vendor_stock >── vendors
+       ├─< recipe_reagents >─┐
+       ├─< recipe_items >────┼── recipes
+       └── recipes.item_id ──┘
+```
+
+| Tabelle | Schluessel | Inhalt |
+|---|---|---|
+| `items` | `item_id` | ein Item aus beiden Quellen: Blizzard gilt zuerst, ForeverDB fuellt auf - auch den Haendlerpreis |
+| `vendors` | `vendor_id` | ein Haendler: Fraktion, Zone, Koordinaten |
+| `vendor_stock` | `vendor_id`, `item_id` | was ein Haendler verkauft: Preis, Stapel, begrenzter Bestand |
+| `vendor_prices` | `item_id` | je Item der guenstigste Haendler, den die Horde erreicht und der unbegrenzt liefert |
+| `recipes` | `recipe_id` | ein Rezept: Beruf, Gruppe, Skill, hergestelltes Item und Menge, Lernquelle (`learned`: `trainer`, `recipe`, `automatic`), Preis beim Lehrer |
+| `recipe_reagents` | `recipe_id`, `item_id` | die Zutaten mit Menge |
+| `recipe_items` | `recipe_id`, `item_id` | die Items, die ein Rezept lehren |
+
+Die Zeilen eines Haendlers und eines Rezepts haengen ueber einen Fremdschluessel an ihrem
+Kopf. Verweise auf Items sind bewusst keine Fremdschluessel: ForeverDB nennt Zutaten und
+Ergebnisse, die in seiner eigenen Item-Liste fehlen - derzeit 256 hergestellte Items und 21
+Zutaten. `db` zaehlt sie, statt daran zu scheitern.
 
 | Sicht | Inhalt |
 |---|---|
 | `snapshots` | jeder Stand jedes Items: Angebote, Menge, Preise |
 | `sales` | Verkaeufe, Ablaeufe und Neuzugaenge zwischen zwei Staenden |
 | `runs` | Protokoll der Sammellaeufe |
-| `blizzard_items` | Stammdaten aus Blizzards API, `raw` als JSON |
-| `foreverdb_items` | die Item-Liste von ForeverDB; weitere Listen als `foreverdb_vendors` usw. |
-| `foreverdb_item_details` | einzeln abgezogene Details: Haendlerpreis, Attribute, Bindung, Entzauberung |
-| `foreverdb_recipes` | die Rezepte der Berufe, wie ForeverDB sie liefert |
-| `vendor_items` | was welcher Haendler verkauft: Preis je Stueck, Fraktion, Zone, begrenzter Bestand |
-| `vendor_flips` | beim Haendler kaufen, im Auktionshaus verkaufen: Gewinn nach 5 % Gebuehr |
-| `items` | beide Quellen zusammengefuehrt: Blizzard gilt zuerst, ForeverDB fuellt auf - auch den Haendlerpreis |
 | `latest` | der juengste Stand mit Namen und Haendlerpreisen |
 | `history` | `snapshots` mit Namen und den Verkaeufen seit dem Stand davor |
 | `sold_daily` | Verkaeufe je Item und Tag, mit `hours_covered` |
-
-Fuers Herstellen gibt es ein eigenes kleines Modell. Ein Rezept stellt ein Item her, braucht
-Zutaten und wird irgendwo gelernt; jedes Item hat einen Preis:
-
-| Sicht | Inhalt |
-|---|---|
-| `recipes` | ein Rezept: Beruf, Gruppe, Skill, hergestelltes Item und Menge, Lernquelle (`learned`: `trainer`, `recipe`, `automatic`), Preis beim Lehrer |
-| `recipe_reagents` | die Zutaten: eine Zeile je Rezept und Item, mit Menge |
-| `recipe_items` | die Items, die ein Rezept lehren |
+| `vendor_items` | `vendor_stock` mit dem Haendler in jeder Zeile - bequemer abzufragen |
+| `vendor_flips` | beim Haendler kaufen, im Auktionshaus verkaufen: Gewinn nach 5 % Gebuehr |
 | `ah_prices` | je Item das guenstigste Angebot im Auktionshaus und die Verkaeufe der letzten 24 Stunden |
-| `vendor_prices` | je Item der guenstigste Haendler, den die Horde erreicht und der unbegrenzt liefert |
 | `item_prices` | was ein Item kostet, wenn man es kaufen muss: `buy_price` und `buy_source` (`ah` oder `vendor`) |
 | `craft_reagents` | die Zutaten mit Preis je Stueck, Bezugsquelle und Summe |
 | `crafts` | je Rezept: Kosten der Zutaten, guenstigstes Angebot des Ergebnisses, Gewinn nach 5 % Gebuehr |
+| `blizzard_items` | die Stammdaten aus Blizzards API im Original, `raw` als JSON |
+| `foreverdb_items`, `foreverdb_item_details`, `foreverdb_vendor_details`, `foreverdb_recipes` | der Abzug von ForeverDB im Original, mit allen Feldern |
 
-Die Definitionen stehen in `collector/crafting.py` und gelten genauso beim Bauen der
-Anzeige-Dateien - die Oberflaeche und eine Abfrage rechnen also gleich.
+Die Tabellen sind eine Kopie und koennten veralten. Die Datei merkt sich deshalb, woraus sie
+gebaut wurde. `sql` baut sie neu, sobald sich Stammdaten geaendert haben, und die
+Abzugskommandos (`foreverdb-...`) tun es am Ende von selbst. Nur wer die Datei mit einem
+anderen Werkzeug oeffnet, ruft nach einem Abzug oder einem `git pull` einmal `db` auf.
+
+Die Rechnung fuers Herstellen (`item_prices`, `craft_reagents`, `crafts`) steht in
+`collector/crafting.py` und gilt genauso beim Bauen der Anzeige-Dateien - die Oberflaeche und
+eine Abfrage rechnen also gleich.
 
 Dazu zwei Helfer: `money(123456)` ergibt `12g 34s 56c`, `gold(123456)` ergibt `12.35`.
 
@@ -605,7 +624,9 @@ collector/
   collect.py    ein Durchlauf: holen, verdichten, Verkaeufe ableiten
   names.py      Stammdaten der Items: Namen, Haendlerpreise, volle Antwort
   foreverdb.py  Client fuer ForeverDB mit Tempolimit; foreverdb_dump.py zieht Listen lokal ab
-  db.py         lokale DuckDB-Datei mit Sichten auf alle Daten; Kommandos db und sql
+  schema.py     das Schema der Stammdaten: die festen Tabellen der lokalen Datenbank
+  crafting.py   Rezepte, Zutaten und die Rechnung, was sich herzustellen lohnt
+  db.py         lokale DuckDB-Datei: Stammdaten als Tabellen, Staende als Sichten; Kommandos db und sql
   publish.py    baut die Dateien fuer die Oberflaeche
   store.py      Pfade und Parquet-Dateien des Warehouse
   __main__.py   py -m collector <kommando>

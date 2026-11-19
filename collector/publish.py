@@ -280,8 +280,7 @@ def _build_crafts(con: duckdb.DuckDBPyConnection, settings: Settings) -> int | N
         """
     )
     # Zum Herstellen taugt nur, wer unbegrenzt liefert.
-    con.execute(crafting.vendor_prices_sql(table, "SELECT * FROM vendor_offers WHERE NOT limited"))
-    con.execute(crafting.model_sql(table))
+    con.execute(crafting.model_sql(table, "SELECT * FROM vendor_offers WHERE NOT limited"))
     con.execute(crafting.costs_sql(table))
 
     # Fuer die Anzeige nur, was sich im Auktionshaus verkaufen laesst. Zahlen als
