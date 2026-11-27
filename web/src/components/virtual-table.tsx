@@ -33,7 +33,12 @@ interface VirtualTableProps<T, K extends string> {
   sort: { key: K; dir: 1 | -1 }
   selectedKey: string | null
   onSort: (key: K) => void
-  onSelect: (key: string) => void
+  /** `byKeyboard` sagt, dass mit den Pfeiltasten geblaettert wird. */
+  onSelect: (key: string, byKeyboard: boolean) => void
+  /** Doppelklick oder Enter auf der gewaehlten Zeile. */
+  onOpen?: (key: string) => void
+  /** Zeilen, die blasser erscheinen sollen. */
+  isDim?: (row: T) => boolean
   /** Unter dieser Breite scrollt die Tabelle waagerecht, statt Spalten zu quetschen. */
   minWidth: number
   emptyText: string
@@ -52,6 +57,8 @@ export function VirtualTable<T, K extends string>({
   selectedKey,
   onSort,
   onSelect,
+  onOpen,
+  isDim,
   minWidth,
   emptyText,
 }: VirtualTableProps<T, K>) {
@@ -68,6 +75,17 @@ export function VirtualTable<T, K extends string>({
   useEffect(() => {
     scrollRef.current?.scrollTo({ top: 0 })
   }, [rows])
+
+  /** Mit den Pfeiltasten zur naechsten Zeile: auswaehlen, in Sicht holen, Fokus mitnehmen. */
+  const step = (from: number, delta: number) => {
+    const next = Math.min(rows.length - 1, Math.max(0, from + delta))
+    if (next === from) return
+    onSelect(getKey(rows[next]), true)
+    virtualizer.scrollToIndex(next)
+    requestAnimationFrame(() => {
+      scrollRef.current?.querySelector<HTMLElement>(`[data-index="${next}"]`)?.focus()
+    })
+  }
 
   const items = virtualizer.getVirtualItems()
   const paddingTop = items.length ? items[0].start : 0
@@ -117,16 +135,22 @@ export function VirtualTable<T, K extends string>({
             return (
               <TableRow
                 key={getRowId ? getRowId(row) : key}
+                data-index={item.index}
                 data-state={key === selectedKey ? "selected" : undefined}
                 tabIndex={0}
-                onClick={() => onSelect(key)}
+                onClick={() => onSelect(key, false)}
+                onDoubleClick={() => onOpen?.(key)}
                 onKeyDown={(event) => {
-                  if (event.key === "Enter" || event.key === " ") {
+                  if (event.key === "ArrowDown" || event.key === "ArrowUp") {
                     event.preventDefault()
-                    onSelect(key)
+                    step(item.index, event.key === "ArrowDown" ? 1 : -1)
+                  } else if (event.key === "Enter" || event.key === " ") {
+                    event.preventDefault()
+                    if (key === selectedKey && event.key === "Enter") onOpen?.(key)
+                    else onSelect(key, false)
                   }
                 }}
-                className="cursor-pointer outline-none focus-visible:bg-muted"
+                className={`cursor-pointer outline-none focus-visible:bg-muted data-[state=selected]:shadow-[inset_2px_0_0_var(--foreground)] ${isDim?.(row) ? "opacity-50" : ""}`}
                 style={{ height: ROW_HEIGHT }}
               >
                 {columns.map((column) => (

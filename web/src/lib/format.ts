@@ -53,6 +53,25 @@ export function formatDuration(seconds: number): string {
   return `${Math.round(seconds)}s`
 }
 
+/** Tage mit einer Nachkommastelle; alles unter einem Zehntel ist "< 0.1 d". */
+export function formatDays(days: number): string {
+  return days < 0.1 ? "< 0.1 d" : `${days.toLocaleString(LOCALE, { maximumFractionDigits: 1 })} d`
+}
+
+/** Ein Verhaeltnis mit einer Nachkommastelle: 2.8 */
+export function formatRatio(value: number): string {
+  return value.toLocaleString(LOCALE, { maximumFractionDigits: 1 })
+}
+
+/** Ein Betrag als Text mit zwei Einheiten: "12g 34s", "34s 56c", "56c". */
+export function moneyText(copper: number | null | undefined): string {
+  if (copper == null) return "–"
+  const { gold, silver, copper: rest } = splitCoins(Math.abs(copper))
+  const sign = Math.round(copper) < 0 ? "−" : ""
+  if (gold > 0) return `${sign}${gold.toLocaleString(LOCALE)}g ${silver}s`
+  return silver > 0 ? `${sign}${silver}s ${rest}c` : `${sign}${rest}c`
+}
+
 export function kindLabel(kind: Kind): string {
   return kind === "commodity" ? "Commodity" : "Single item"
 }

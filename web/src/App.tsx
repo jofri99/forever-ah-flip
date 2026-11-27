@@ -1,135 +1,296 @@
-import { lazy, Suspense, useDeferredValue, useEffect, useMemo, useState } from "react"
-import { Moon, Sun } from "lucide-react"
+import { useEffect, useMemo, useState } from "react"
+import type { ReactNode } from "react"
+import {
+  ArrowDownToLine,
+  ChartNoAxesColumn,
+  FlaskConical,
+  LayoutDashboard,
+  Moon,
+  RefreshCw,
+  Search,
+  ShoppingCart,
+  Star,
+  Store,
+  Sun,
+  User,
+} from "lucide-react"
+import type { LucideIcon } from "lucide-react"
 
-import { CraftTable } from "@/components/craft-table"
-import { FlipTable } from "@/components/flip-table"
-import { MarketTable } from "@/components/market-table"
+import { Assume, Segmented } from "@/components/bits"
+import { CommandPalette, ProfessionsDialog } from "@/components/dialogs"
+import { ItemPanel } from "@/components/item-panel"
 import { useTheme } from "@/components/theme-provider"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
-import { Label } from "@/components/ui/label"
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
-import { Switch } from "@/components/ui/switch"
-import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
-import { useHashSelection } from "@/hooks/use-hash-selection"
+import { AppProvider, deriveData, useApp } from "@/lib/app"
+import type { AppData } from "@/lib/app"
 import {
   loadCraftReagents,
   loadCrafts,
+  loadItemVendors,
+  loadLadder,
   loadMarket,
   loadMeta,
   loadNames,
   loadVendorFlips,
 } from "@/lib/data"
 import { formatDateTime, formatInt } from "@/lib/format"
-import {
-  ALL,
-  categories,
-  craftCategories,
-  craftsByItem,
-  filterCrafts,
-  filterFlips,
-  filterRows,
-  groupReagents,
-  nextSort,
-  professions,
-  rowKey,
-  sortCrafts,
-  sortFlips,
-  sortRows,
-  subcategories,
-} from "@/lib/rows"
-import type {
-  Craft,
-  CraftReagent,
-  CraftSortKey,
-  FlipSortKey,
-  KindFilter,
-  MarketRow,
-  Meta,
-  Names,
-  Sort,
-  SortKey,
-  VendorFlip,
-} from "@/lib/types"
+import type { Page } from "@/lib/route"
+import { craftProfit } from "@/lib/trade"
+import { ItemPage } from "@/pages/item"
+import { CraftingPage, FlipsPage, MarketPage, WatchlistPage } from "@/pages/lists"
+import { OpportunitiesPage } from "@/pages/opportunities"
+import { ShoppingPage } from "@/pages/shopping"
+import { LowPage, ResetPage } from "@/pages/trade"
 
-// Das Diagramm wird erst geladen, wenn jemand ein Item oeffnet - die Tabelle
-// steht damit, bevor die Diagramm-Bibliothek ueberhaupt angefragt wurde.
-const ItemDetail = lazy(() =>
-  import("@/components/item-detail").then((module) => ({ default: module.ItemDetail })),
-)
-
-type Status =
-  | { state: "loading" }
-  | { state: "error"; message: string }
-  | {
-      state: "ready"
-      meta: Meta
-      market: MarketRow[]
-      names: Names
-      flips: VendorFlip[]
-      crafts: Craft[]
-      reagents: CraftReagent[]
-    }
-
-type View = "market" | "flips" | "crafts"
-
-const NO_CRAFTS: Craft[] = []
+type Status = { state: "loading" } | { state: "error"; message: string } | { state: "ready"; data: AppData }
 
 function ThemeToggle() {
   const { theme, setTheme } = useTheme()
   const dark =
-    theme === "dark" ||
-    (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
+    theme === "dark" || (theme === "system" && window.matchMedia("(prefers-color-scheme: dark)").matches)
   return (
     <Button
       variant="ghost"
       size="icon"
       onClick={() => setTheme(dark ? "light" : "dark")}
       aria-label={dark ? "Light theme" : "Dark theme"}
+      title={dark ? "Light theme" : "Dark theme"}
     >
       {dark ? <Sun /> : <Moon />}
     </Button>
   )
 }
 
+function NavButton({
+  icon: Icon,
+  label,
+  active,
+  count,
+  sub,
+  onClick,
+}: {
+  icon: LucideIcon
+  label: string
+  active?: boolean
+  count?: number
+  sub?: string
+  onClick: () => void
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      title={label}
+      aria-current={active ? "page" : undefined}
+      className={`flex w-full items-center justify-center gap-2.5 rounded-md px-0 py-2 text-left text-sm focus-visible:outline-2 focus-visible:outline-ring lg:justify-start lg:px-2.5 lg:py-1.5 ${
+        active ? "bg-muted font-medium text-foreground" : "text-muted-foreground hover:bg-muted hover:text-foreground"
+      }`}
+    >
+      <Icon className="size-4 shrink-0" aria-hidden />
+      <span className="hidden min-w-0 flex-1 lg:block">
+        <span className="block truncate">{label}</span>
+        {sub && <span className="block truncate text-[11px] font-normal text-muted-foreground">{sub}</span>}
+      </span>
+      {count != null && count > 0 && (
+        <span className="hidden text-[11px] text-muted-foreground tabular-nums lg:inline">{formatInt(count)}</span>
+      )}
+    </button>
+  )
+}
+
+/** Der Rahmen: Navigation links, Annahmen oben, die Seite in der Mitte, das gewaehlte Item rechts. */
+function Shell() {
+  const app = useApp()
+  const { route } = app
+  const [paletteOpen, setPaletteOpen] = useState(false)
+  const [professionsOpen, setProfessionsOpen] = useState(false)
+
+  // Von welcher Liste aus die Vollseite eines Items geoeffnet wurde.
+  const [origin, setOrigin] = useState<Page>(route.page === "item" ? "opportunities" : route.page)
+  if (route.page !== "item" && route.page !== origin) setOrigin(route.page)
+
+  const profitable = useMemo(
+    () =>
+      app.crafts.filter((craft) => (craftProfit(craft, app.rows.get(craft.item_id), app.a.basis) ?? 0) > 0).length,
+    [app.crafts, app.rows, app.a.basis],
+  )
+
+  const { back, select } = app
+  const overlayOpen = paletteOpen || professionsOpen
+  useEffect(() => {
+    const onKey = (event: KeyboardEvent) => {
+      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "k") {
+        event.preventDefault()
+        setPaletteOpen((open) => !open)
+        return
+      }
+      if (overlayOpen) return
+      const typing = event.target instanceof HTMLElement && /^(INPUT|SELECT|TEXTAREA)$/.test(event.target.tagName)
+      if (event.key === "Escape") {
+        if (route.page === "item") back()
+        else if (route.id != null) select(null)
+      } else if (event.key === "/" && !typing) {
+        const field = document.querySelector<HTMLInputElement>('main input[type="search"]')
+        if (field) {
+          event.preventDefault()
+          field.focus()
+        }
+      }
+    }
+    window.addEventListener("keydown", onKey)
+    return () => window.removeEventListener("keydown", onKey)
+  }, [overlayOpen, route.page, route.id, back, select])
+
+  const hasLadder = app.ladder.size > 0
+  const professions = Object.entries(app.professions)
+  const pages: Record<Page, ReactNode> = {
+    opportunities: <OpportunitiesPage onSetProfessions={() => setProfessionsOpen(true)} />,
+    crafting: <CraftingPage />,
+    flips: <FlipsPage />,
+    low: <LowPage />,
+    reset: <ResetPage />,
+    market: <MarketPage />,
+    watchlist: <WatchlistPage />,
+    shopping: <ShoppingPage />,
+    item: route.id != null ? <ItemPage key={route.id} itemId={route.id} origin={origin} /> : null,
+  }
+  const nav = (page: Page, label: string, icon: LucideIcon, count?: number) => (
+    <NavButton icon={icon} label={label} count={count} active={route.page === page} onClick={() => app.go(page)} />
+  )
+
+  return (
+    <div className="grid h-svh grid-cols-[auto_minmax(0,1fr)_auto] overflow-hidden bg-muted/40 text-sm">
+      <nav aria-label="Sections" className="flex w-14 flex-col gap-0.5 border-r bg-card px-1.5 py-3 lg:w-52 lg:px-2">
+        <div className="flex items-center justify-center gap-2 px-2.5 pb-3 text-[15px] font-semibold lg:justify-start">
+          <i className="size-[18px] shrink-0 rounded-[5px] bg-price" aria-hidden />
+          <span className="hidden lg:inline">Forever AH</span>
+        </div>
+        {nav("opportunities", "Opportunities", LayoutDashboard)}
+        {app.crafts.length > 0 && nav("crafting", "Crafting", FlaskConical, profitable)}
+        {app.flips.length > 0 && nav("flips", "Vendor flips", Store, app.flips.length)}
+        {hasLadder && nav("low", "Buy low", ArrowDownToLine, app.trades.low.length)}
+        {hasLadder && nav("reset", "Market reset", RefreshCw, app.trades.resets.length)}
+        {nav("market", "Market", ChartNoAxesColumn)}
+        <div className="mx-1.5 my-2 h-px bg-border" />
+        {nav("watchlist", "Watchlist", Star, app.watch.length)}
+        {nav("shopping", "Shopping list", ShoppingCart, app.cart.length)}
+        <div className="mt-auto flex flex-col gap-1.5">
+          {app.crafts.length > 0 && (
+            <NavButton
+              icon={User}
+              label="My professions"
+              sub={professions.length ? professions.map(([name, skill]) => `${name} ${skill}`).join(" · ") : "Not set"}
+              onClick={() => setProfessionsOpen(true)}
+            />
+          )}
+          <p className="hidden px-2.5 text-[11px] leading-snug text-muted-foreground lg:block">
+            Horde · Normal ruleset
+            <br />
+            {app.meta.live_snapshot ? "Listings" : "Snapshot"} as of{" "}
+            {formatDateTime(app.meta.live_snapshot ?? app.meta.last_snapshot)}
+            <br />
+            {formatInt(app.meta.snapshots)} snapshots in {app.meta.window_days} days
+          </p>
+        </div>
+      </nav>
+
+      <div className="flex min-w-0 flex-col">
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-b bg-card px-4 py-2.5">
+          <button
+            type="button"
+            onClick={() => setPaletteOpen(true)}
+            className="flex min-w-48 flex-1 items-center gap-2 rounded-lg border bg-background px-2.5 py-1.5 text-left text-muted-foreground hover:border-ring focus-visible:outline-2 focus-visible:outline-ring sm:max-w-80"
+          >
+            <Search className="size-4" aria-hidden />
+            <span className="truncate">Search items and recipes…</span>
+            <kbd className="ml-auto rounded border bg-card px-1.5 font-mono text-[11px] whitespace-nowrap">Ctrl K</kbd>
+          </button>
+          <span className="flex-1" />
+          <Assume label="Sell at">
+            <Segmented
+              label="Sell at"
+              value={app.a.basis}
+              onChange={(basis) => app.setA({ basis })}
+              options={[
+                ["now", "Lowest now"],
+                ["low", "24h low"],
+              ]}
+            />
+          </Assume>
+          <Assume label="My share of sales">
+            <Segmented
+              label="My share of sales"
+              value={app.a.share}
+              onChange={(share) => app.setA({ share })}
+              options={[
+                [0.05, "5%"],
+                [0.1, "10%"],
+                [0.25, "25%"],
+              ]}
+            />
+          </Assume>
+          <Button variant="outline" onClick={() => app.go("shopping")}>
+            <ShoppingCart aria-hidden />
+            Shopping list
+            {app.cart.length > 0 && (
+              <span className="rounded-full bg-primary px-1.5 text-[11px] text-primary-foreground">{app.cart.length}</span>
+            )}
+          </Button>
+          <ThemeToggle />
+        </div>
+
+        <main className="flex-1 overflow-auto px-5 pt-4 pb-6">
+          {pages[route.page]}
+          <footer className="mt-6 text-xs text-muted-foreground">
+            Data: Blizzard Battle.net API, collected hourly. Prices per unit. Charts:{" "}
+            <a href="https://www.tradingview.com/" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+              TradingView Lightweight Charts
+            </a>
+            .
+            {((app.meta.name_sources?.foreverdb ?? 0) > 0 || app.flips.length > 0 || app.crafts.length > 0) && (
+              <>
+                {" "}
+                Some names and all vendor and recipe data from{" "}
+                <a href="https://foreverdb.net" target="_blank" rel="noopener noreferrer" className="underline underline-offset-2">
+                  ForeverDB.net
+                </a>
+                .
+              </>
+            )}
+          </footer>
+        </main>
+      </div>
+
+      {route.page !== "item" && route.id != null && <ItemPanel key={route.id} itemId={route.id} />}
+      <CommandPalette open={paletteOpen} onOpenChange={setPaletteOpen} />
+      <ProfessionsDialog open={professionsOpen} onOpenChange={setProfessionsOpen} />
+    </div>
+  )
+}
+
 export function App() {
   const [status, setStatus] = useState<Status>({ state: "loading" })
-  const [view, setView] = useState<View>("market")
-  const [query, setQuery] = useState("")
-  const [kind, setKind] = useState<KindFilter>("all")
-  const [category, setCategory] = useState(ALL)
-  const [subcategory, setSubcategory] = useState(ALL)
-  const [sort, setSort] = useState<Sort>({ key: "n_listings", dir: -1 })
-  const [flipSort, setFlipSort] = useState<Sort<FlipSortKey>>({ key: "profit", dir: -1 })
-  const [craftSort, setCraftSort] = useState<Sort<CraftSortKey>>({ key: "profit", dir: -1 })
-  const [unlimitedOnly, setUnlimitedOnly] = useState(false)
-  const [soldOnly, setSoldOnly] = useState(false)
-  const [profitableOnly, setProfitableOnly] = useState(true)
-  const [noCooldown, setNoCooldown] = useState(false)
-  const [selectedKey, select] = useHashSelection()
-  const deferredQuery = useDeferredValue(query)
 
   useEffect(() => {
     let cancelled = false
     ;(async () => {
       try {
         const meta = await loadMeta()
-        const [market, names, flips, crafts, reagents] = await Promise.all([
+        const [market, names, flips, crafts, reagents, ladder, vendors] = await Promise.all([
           loadMarket(meta),
           loadNames(meta),
           loadVendorFlips(meta),
           loadCrafts(meta),
           loadCraftReagents(meta),
+          loadLadder(meta),
+          loadItemVendors(meta),
         ])
         if (!cancelled) {
-          setStatus({ state: "ready", meta, market, names, flips, crafts, reagents })
+          setStatus({
+            state: "ready",
+            data: deriveData({ meta, market, names, flips, crafts, reagents, ladder, vendors }),
+          })
         }
       } catch (error) {
         if (!cancelled) {
@@ -142,313 +303,25 @@ export function App() {
     }
   }, [])
 
-  const ready = status.state === "ready" ? status : null
-  // Haendler-Flips und Rezepte gibt es nur mit lokalem Abzug. Ohne sie bleibt es beim Markt.
-  const hasFlips = (ready?.flips.length ?? 0) > 0
-  const hasCrafts = (ready?.crafts.length ?? 0) > 0
-  const showFlips = view === "flips" && hasFlips
-  const showCrafts = view === "crafts" && hasCrafts
-
-  const marketRows = useMemo(() => {
-    if (!ready) return []
-    return sortRows(
-      filterRows(ready.market, deferredQuery, kind, ready.names, category, subcategory),
-      sort,
-      ready.names,
+  if (status.state === "loading") {
+    return (
+      <div className="flex h-svh flex-col gap-3 p-6">
+        <Skeleton className="h-9 w-full max-w-md" />
+        <Skeleton className="w-full flex-1" />
+      </div>
     )
-  }, [ready, deferredQuery, kind, category, subcategory, sort])
-
-  const flipRows = useMemo(() => {
-    if (!ready) return []
-    const filtered = filterRows(ready.flips, deferredQuery, "all", ready.names, category, subcategory)
-    return sortFlips(filterFlips(filtered, { unlimitedOnly, soldOnly }), flipSort, ready.names)
-  }, [ready, deferredQuery, category, subcategory, unlimitedOnly, soldOnly, flipSort])
-
-  const craftRows = useMemo(() => {
-    if (!ready) return []
-    const filtered = filterCrafts(
-      ready.crafts,
-      {
-        query: deferredQuery,
-        profession: category,
-        category: subcategory,
-        profitableOnly,
-        soldOnly,
-        noCooldown,
-      },
-      ready.names,
+  }
+  if (status.state === "error") {
+    return (
+      <p className="m-6 rounded-lg border border-destructive/40 p-4 text-sm text-destructive">
+        The data could not be loaded ({status.message}). Locally, run <code>python -m collector publish</code> first.
+      </p>
     )
-    return sortCrafts(filtered, craftSort, ready.names)
-  }, [ready, deferredQuery, category, subcategory, profitableOnly, soldOnly, noCooldown, craftSort])
-
-  // Die Auswahl richtet sich nach der gezeigten Ansicht: Typ und Untertyp des Items,
-  // bei den Rezepten Beruf und Gruppe.
-  const source = ready ? (showFlips ? ready.flips : ready.market) : null
-  const crafts = ready?.crafts ?? NO_CRAFTS
-  const categoryOptions = useMemo(
-    () => (showCrafts ? professions(crafts) : source ? categories(source) : []),
-    [showCrafts, crafts, source],
-  )
-  const subcategoryOptions = useMemo(() => {
-    if (category === ALL) return []
-    if (showCrafts) return craftCategories(crafts, category)
-    return source ? subcategories(source, category) : []
-  }, [showCrafts, crafts, source, category])
-
-  const selectedRow = useMemo(
-    () => ready?.market.find((row) => rowKey(row) === selectedKey) ?? null,
-    [ready, selectedKey],
-  )
-
-  // Fuer die Detailansicht: welche Rezepte stellen ein Item her, was brauchen sie,
-  // und unter welchem Schluessel steht eine Zutat im Markt.
-  const craftIndex = useMemo(() => craftsByItem(crafts), [crafts])
-  const reagentIndex = useMemo(() => groupReagents(ready?.reagents ?? []), [ready])
-  const marketKeys = useMemo(() => {
-    const keys = new Map<number, string>()
-    for (const row of ready?.market ?? []) {
-      if (!keys.has(row.item_id)) keys.set(row.item_id, rowKey(row))
-    }
-    return keys
-  }, [ready])
-
-  const shown = showCrafts ? craftRows.length : showFlips ? flipRows.length : marketRows.length
-
+  }
   return (
-    <div className="mx-auto flex min-h-svh max-w-7xl flex-col gap-4 p-4 md:p-6">
-      <header className="flex items-start justify-between gap-4">
-        <div>
-          <h1 className="text-xl font-semibold tracking-tight">Forever AH – Horde, Normal ruleset</h1>
-          <p className="text-sm text-muted-foreground">
-            {ready
-              ? `As of ${formatDateTime(ready.meta.last_snapshot)} · ${formatInt(ready.meta.items)} items · ` +
-                `${ready.meta.snapshots} snapshots since ${formatDateTime(ready.meta.first_snapshot)}`
-              : status.state === "loading"
-                ? "Loading data …"
-                : "No data"}
-          </p>
-        </div>
-        <ThemeToggle />
-      </header>
-
-      {status.state === "error" && (
-        <p className="rounded-lg border border-destructive/40 p-4 text-sm text-destructive">
-          The data could not be loaded ({status.message}). Locally, run{" "}
-          <code>python -m collector publish</code> first.
-        </p>
-      )}
-
-      {status.state === "loading" && (
-        <div className="flex flex-col gap-2">
-          <Skeleton className="h-9 w-full max-w-md" />
-          <Skeleton className="h-96 w-full" />
-        </div>
-      )}
-
-      {ready && (
-        <>
-          {selectedRow && (
-            <Suspense fallback={<Skeleton className="h-[560px] w-full" />}>
-              <ItemDetail
-                key={rowKey(selectedRow)}
-                meta={ready.meta}
-                row={selectedRow}
-                names={ready.names}
-                crafts={craftIndex.get(selectedRow.item_id) ?? NO_CRAFTS}
-                reagents={reagentIndex}
-                marketKey={(itemId) => marketKeys.get(itemId) ?? null}
-                onSelect={select}
-                onClose={() => select(null)}
-              />
-            </Suspense>
-          )}
-
-          {(hasFlips || hasCrafts) && (
-            <Tabs
-              value={view}
-              onValueChange={(value) => {
-                setView(value as View)
-                // Jede Ansicht kennt andere Typen.
-                setCategory(ALL)
-                setSubcategory(ALL)
-              }}
-            >
-              <TabsList>
-                <TabsTrigger value="market">Market</TabsTrigger>
-                {hasFlips && (
-                  <TabsTrigger value="flips">Vendor flips ({formatInt(ready.flips.length)})</TabsTrigger>
-                )}
-                {hasCrafts && (
-                  <TabsTrigger value="crafts">Crafting ({formatInt(ready.crafts.length)})</TabsTrigger>
-                )}
-              </TabsList>
-            </Tabs>
-          )}
-
-          {showFlips && (
-            <p className="text-sm text-muted-foreground">
-              Buy from a vendor, sell on the auction house. Profit is per unit, after the 5% auction
-              house cut, against the lowest current listing. Vendor stock comes from ForeverDB and is
-              not checked in game: a vendor may require reputation, and limited stock restocks slowly.
-            </p>
-          )}
-
-          {showCrafts && (
-            <p className="text-sm text-muted-foreground">
-              Buy the reagents, craft, sell on the auction house. Every reagent is priced at its
-              cheapest current source, auction house or vendor. Profit is per craft, after the 5%
-              auction house cut, against the lowest current listing. Recipes come from ForeverDB;
-              learning one costs extra, and a recipe marked with a timer can only be crafted once
-              per cooldown.
-            </p>
-          )}
-
-          <div className="flex flex-wrap items-center gap-3">
-            <Input
-              type="search"
-              value={query}
-              onChange={(event) => setQuery(event.target.value)}
-              placeholder="Search item or ID …"
-              aria-label="Search item or ID"
-              className="max-w-sm"
-            />
-            {!showFlips && !showCrafts && (
-              <Select value={kind} onValueChange={(value) => setKind(value as KindFilter)}>
-                <SelectTrigger className="w-44" aria-label="Listing kind">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All listings</SelectItem>
-                  <SelectItem value="auction">Single items</SelectItem>
-                  <SelectItem value="commodity">Commodities</SelectItem>
-                </SelectContent>
-              </Select>
-            )}
-            {categoryOptions.length > 0 && (
-              <Select
-                value={category}
-                onValueChange={(value) => {
-                  setCategory(value)
-                  setSubcategory(ALL)
-                }}
-              >
-                <SelectTrigger className="w-52" aria-label={showCrafts ? "Profession" : "Category"}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL}>{showCrafts ? "All professions" : "All categories"}</SelectItem>
-                  {categoryOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.value} ({formatInt(option.count)})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {subcategoryOptions.length > 1 && (
-              <Select value={subcategory} onValueChange={setSubcategory}>
-                <SelectTrigger className="w-52" aria-label={showCrafts ? "Category" : "Subcategory"}>
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value={ALL}>{showCrafts ? "All categories" : "All subcategories"}</SelectItem>
-                  {subcategoryOptions.map((option) => (
-                    <SelectItem key={option.value} value={option.value}>
-                      {option.value} ({formatInt(option.count)})
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            )}
-            {showFlips && (
-              <div className="flex items-center gap-2">
-                <Switch id="unlimited" checked={unlimitedOnly} onCheckedChange={setUnlimitedOnly} />
-                <Label htmlFor="unlimited">Unlimited stock only</Label>
-              </div>
-            )}
-            {showCrafts && (
-              <div className="flex items-center gap-2">
-                <Switch id="profitable" checked={profitableOnly} onCheckedChange={setProfitableOnly} />
-                <Label htmlFor="profitable">Profitable only</Label>
-              </div>
-            )}
-            {(showFlips || showCrafts) && (
-              <div className="flex items-center gap-2">
-                <Switch id="sold" checked={soldOnly} onCheckedChange={setSoldOnly} />
-                <Label htmlFor="sold">Sold in last 24h</Label>
-              </div>
-            )}
-            {showCrafts && (
-              <div className="flex items-center gap-2">
-                <Switch id="no-cooldown" checked={noCooldown} onCheckedChange={setNoCooldown} />
-                <Label htmlFor="no-cooldown">No cooldown</Label>
-              </div>
-            )}
-            <span className="text-sm text-muted-foreground">
-              {formatInt(shown)} {showCrafts ? "recipe" : "item"}
-              {shown === 1 ? "" : "s"}
-            </span>
-          </div>
-
-          {showCrafts ? (
-            <CraftTable
-              rows={craftRows}
-              names={ready.names}
-              sort={craftSort}
-              selectedKey={selectedKey}
-              onSort={(key: CraftSortKey) => setCraftSort((current) => nextSort(current, key))}
-              onSelect={select}
-            />
-          ) : showFlips ? (
-            <FlipTable
-              rows={flipRows}
-              names={ready.names}
-              sort={flipSort}
-              selectedKey={selectedKey}
-              onSort={(key: FlipSortKey) => setFlipSort((current) => nextSort(current, key))}
-              onSelect={select}
-            />
-          ) : (
-            <MarketTable
-              rows={marketRows}
-              names={ready.names}
-              sort={sort}
-              selectedKey={selectedKey}
-              onSort={(key: SortKey) => setSort((current) => nextSort(current, key))}
-              onSelect={select}
-            />
-          )}
-        </>
-      )}
-
-      <footer className="mt-auto pt-4 text-xs text-muted-foreground">
-        Data: Blizzard Battle.net API, collected hourly. Prices per unit. Charts:{" "}
-        <a
-          href="https://www.tradingview.com/"
-          target="_blank"
-          rel="noopener noreferrer"
-          className="underline underline-offset-2"
-        >
-          TradingView Lightweight Charts
-        </a>
-        .
-        {ready && ((ready.meta.name_sources?.foreverdb ?? 0) > 0 || hasFlips || hasCrafts) && (
-          <>
-            {" "}
-            Some names and all vendor and recipe data from{" "}
-            <a
-              href="https://foreverdb.net"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="underline underline-offset-2"
-            >
-              ForeverDB.net
-            </a>
-            .
-          </>
-        )}
-      </footer>
-    </div>
+    <AppProvider data={status.data}>
+      <Shell />
+    </AppProvider>
   )
 }
 

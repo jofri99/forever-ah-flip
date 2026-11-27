@@ -137,6 +137,16 @@
     --bars: oklch(0.84 0.05 85);
     --up: oklch(0.5 0.14 150);
     --down: oklch(0.55 0.2 27);
+    /* Diagramme: eine Farbe von hell nach dunkel fuer Mengen, zwei Pole mit grauer Mitte
+       fuer drueber und drunter. */
+    --viz: #2a78d6;
+    --viz-1: #cde2fb;
+    --viz-2: #86b6ef;
+    --viz-3: #3987e5;
+    --viz-4: #1c5cab;
+    --viz-5: #0d366b;
+    --viz-warm: #e34948;
+    --viz-mid: #f0efec;
 }
 
 .dark {
@@ -147,6 +157,15 @@
     --bars: oklch(0.5 0.04 85);
     --up: oklch(0.8 0.17 150);
     --down: oklch(0.72 0.17 22);
+    /* Im Dunkeln laeuft die Mengenskala andersherum: wenig tritt zurueck, viel leuchtet. */
+    --viz: #3987e5;
+    --viz-1: #0d366b;
+    --viz-2: #1c5cab;
+    --viz-3: #3987e5;
+    --viz-4: #86b6ef;
+    --viz-5: #cde2fb;
+    --viz-warm: #e66767;
+    --viz-mid: #383835;
 }
 
 @theme inline {
@@ -157,4 +176,5 @@
     --color-bars: var(--bars);
     --color-up: var(--up);
     --color-down: var(--down);
+    --color-viz: var(--viz);
 }

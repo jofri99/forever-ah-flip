@@ -14,7 +14,7 @@ Drei Datenquellen:
 | Teil | Was es macht |
 |---|---|
 | `collector/` | Python-Paket: sammelt ueber die Battle.net-API und baut die Dateien fuer die Anzeige. |
-| `web/` | Die Oberflaeche: React, TypeScript, Vite, shadcn/ui. Markttabelle und Preisverlauf. |
+| `web/` | Die Oberflaeche: React, TypeScript, Vite, shadcn/ui. Gelegenheiten, Rezepte, Flips, Low Buy, Market Reset und eine Seite je Item. |
 | `viewer/index.html` | Aelterer Einzeldatei-Viewer fuer TSM-Daten und eigene Dumps, ohne Verlauf. |
 | `addon/AHDump` | In-Game-Addon. `/ahdump` macht einen Full-Scan des Auktionshauses. |
 | `tools/Convert-AHDump.ps1` | Optional: macht aus `AHDump.lua` eine CSV fuer Excel, Pandas & Co. |
@@ -345,17 +345,30 @@ ueber 14 Tage laege in 336 Dateien. `publish` baut daraus eine Form, die ein Bro
 wenigen Teilabrufen lesen kann:
 
 ```powershell
-python -m collector publish            # 14 Tage nach web/public/data
+python -m collector publish            # 14 Tage nach web/public/data, dazu der aktuelle Stand
 python -m collector publish --days 30
+python -m collector publish --no-live  # ohne den aktuellen Stand von Blizzard
 ```
+
+Stehen Zugangsdaten in der `.env`, holt `publish` ausserdem den aktuellen Stand direkt von
+Blizzard - zwei Anfragen, etwa zehn Sekunden - mit jedem einzelnen Angebot. Er wird zum
+juengsten Stand des Markts, und aus ihm entsteht die **Preisleiter**: je Item und Preis die
+angebotene Menge. Ohne sie laesst sich nicht rechnen, was ein Aufkauf kostet. Die
+gespeicherten Kennzahlen (guenstigstes Angebot, unteres Viertel, Median) taugen dafuer
+nicht: an einem echten Stand gemessen lagen die daraus geschaetzten Kosten im Median um
+56 % daneben. Im Warehouse wird die Leiter bewusst nicht gespeichert - sie ist so gross wie
+der Stand selbst und wuerde den Branch `data` verdreifachen. Gebraucht wird immer nur die
+aktuelle.
 
 | Datei | Inhalt |
 |---|---|
 | `hourly.parquet` | alle Staende des Zeitfensters mit Preisen, Mengen und Verkaeufen, nach Item sortiert und in Zeilengruppen von 8192 geschnitten |
-| `market.parquet` | der juengste Stand, eine Zeile je Item, dazu Tief, Hoch, Veraenderung und Verkaeufe der letzten 24 Stunden |
-| `meta.json` | Zeitraum, Anzahl Staende, Dateigroessen |
-| `names.json` | Item-ID zu Name, nur fuer Items im Zeitfenster |
+| `market.parquet` | der juengste Stand, eine Zeile je Item, dazu Tief, Hoch, Veraenderung, Verkaeufe und Neueinstellungen der letzten 24 Stunden, der uebliche Preis und - mit Preisleiter - der Marktwert |
+| `ladder.parquet` | nur mit aktuellem Stand: die Preisleiter, je Item und Preis die Menge, von unten nach oben |
+| `meta.json` | Zeitraum, Anzahl Staende, Dateigroessen, von wann der aktuelle Stand ist |
+| `names.json` | Item-ID zu Name, fuer Items im Zeitfenster und im Markt |
 | `vendor_flips.parquet` | nur mit lokalem Abzug der Haendler: Items, die im Auktionshaus mehr bringen, als sie beim Haendler kosten |
+| `item_vendors.parquet` | ebenso: je Item die drei guenstigsten erreichbaren Haendler und wie viele es insgesamt fuehren |
 | `crafts.parquet` | nur mit lokalem Abzug der Rezepte: je Rezept, dessen Ergebnis im Auktionshaus steht, Kosten, Erloes und Gewinn |
 | `craft_reagents.parquet` | die Zutaten dieser Rezepte mit Preis und Bezugsquelle |
 
@@ -363,6 +376,16 @@ Wer ein Item will, liest am Ende von `hourly.parquet` nach, in welcher Zeilengru
 liegt, und holt nur die. Zeit steht als Unix-Sekunden drin, Preise als `DOUBLE` - beides
 kommt im Browser als gewoehnliche Zahl an. Komprimiert wird mit Snappy, weil schlanke
 Parquet-Leser das ohne Zusatzpaket verstehen.
+
+Zwei Preise neben dem guenstigsten Angebot:
+
+- Der **uebliche Preis** (`usual_price`) ist der Median des guenstigsten Angebots ueber alle
+  Staende des Zeitfensters. Er steht erst da, wenn ein Item in mindestens 24 Staenden vorkam.
+  An ihm misst sich, ob ein Angebot guenstig ist und wohin ein Reset zielen darf.
+- Der **Marktwert** (`market_value`) wird aus der Preisleiter nach dem Verfahren von TSMs
+  AuctionDB gerechnet: die guenstigsten 30 % der Stuecke, nach den ersten 15 % Schluss bei
+  einem Preissprung von 20 %, Ausreisser jenseits von 1,5 Standardabweichungen weg, der Rest
+  gemittelt. So zaehlt weder ein einzelnes Schnaeppchen noch eine Wand ueberteuerter Angebote.
 
 `sales_hours_24h` in `market.parquet` sagt, wie viele der letzten 24 Stunden durch
 Vergleiche gedeckt sind. Steht dort 6, sind die Verkaufszahlen ein Viertel der Wahrheit.
@@ -372,8 +395,7 @@ Die Dateien sind abgeleitet und jederzeit neu baubar, `web/public/data/` steht d
 
 ### Die Oberflaeche
 
-`web/` ist eine React-App: TypeScript, Vite, Tailwind und shadcn/ui. Sie zeigt den Markt
-als Tabelle und den Preisverlauf eines Items als Diagramm. Gebraucht wird Node.js.
+`web/` ist eine React-App: TypeScript, Vite, Tailwind und shadcn/ui. Gebraucht wird Node.js.
 
 ```powershell
 git -C data/warehouse pull          # frische Daten holen
@@ -383,54 +405,95 @@ npm install                         # einmalig
 npm run dev                         # http://localhost:5173
 ```
 
-- Die Tabelle laesst sich nach jeder Spalte sortieren, nach Name oder ID durchsuchen und
-  auf Einzelstuecke oder Stapelware einschraenken. Fehlende Werte stehen immer am Ende.
-- Ein Filter nach Typ (Recipe, Armor, Trade Goods, ...) und, sobald ein Typ gewaehlt ist,
-  nach Untertyp - bei Rezepten ist das der Beruf. Die Zahl in Klammern nennt die Items.
-  Von den gut 6.000 Zeilen stehen nur die sichtbaren im Dokument.
-- Der Reiter **Vendor flips** zeigt, was sich beim Haendler kaufen und im Auktionshaus
-  teurer verkaufen laesst: Haendlerpreis, guenstigstes Angebot, Gewinn nach 5 % Gebuehr,
-  Verkaeufe der letzten 24 Stunden, Haendler und Zone. Zwei Schalter blenden begrenzten
-  Bestand und Items ohne Verkaeufe aus. Den Reiter gibt es nur, wenn lokal ein Abzug der
-  Haendler von ForeverDB vorliegt - auf einer oeffentlichen Seite also nicht.
-- Der Reiter **Crafting** zeigt, was sich herzustellen lohnt: Kosten der Zutaten,
-  guenstigstes Angebot des Ergebnisses, Gewinn je Durchgang nach 5 % Gebuehr, Angebote und
-  Verkaeufe. Filtern laesst sich nach Beruf und dessen Gruppen; drei Schalter beschraenken
-  auf lohnende Rezepte, auf solche mit Verkaeufen und auf solche ohne Abklingzeit. Ein
-  Rezept mit Abklingzeit traegt eine Uhr mit der Dauer. Auch diesen Reiter gibt es nur mit
-  lokalem Abzug von ForeverDB.
-- Ein Klick oder Enter auf einer Zeile oeffnet den Verlauf: guenstigster Preis, Median und
-  darunter die verkaufte Menge je Stand - oder die Zahl der Angebote, solange es keine
-  Verkaufsdaten gibt.
-- Laesst sich das Item herstellen, steht unter dem Verlauf die Rechnung: jede Zutat mit
-  Menge, Preis und der guenstigsten Bezugsquelle, darunter Kosten, Erloes und Gewinn. Ein
-  Klick auf eine Zutat oeffnet deren Verlauf.
-- Die Adresse merkt sich das Item (`#12359:commodity`). Ein Verlauf laesst sich verlinken,
-  und die Zurueck-Taste schliesst ihn wieder.
-- Zeiten stehen in Ortszeit. Hell und dunkel folgen dem System, der Knopf oben rechts
-  oder die Taste `d` schaltet um.
+Links die Navigation, oben die Annahmen, in der Mitte die Seite, rechts das gewaehlte Item.
+
+| Seite | Zeigt |
+|---|---|
+| **Opportunities** | die besten Treffer jeder Art nebeneinander, sortiert nach dem, was am Tag realistisch drin ist |
+| **Crafting** | jedes Rezept, dessen Ergebnis im Auktionshaus steht: Zutaten, Erloes, Gewinn, Verkaeufe |
+| **Vendor flips** | was ein Haendler guenstiger verkauft als das Auktionshaus |
+| **Buy low** | Angebote deutlich unter dem ueblichen Preis: kaufen, zum ueblichen Preis wieder einstellen |
+| **Market reset** | alles bis zu einer Luecke aufkaufen und knapp unter dem naechsten Angebot wieder einstellen |
+| **Market** | der juengste Stand, eine Zeile je Item |
+| **Watchlist**, **Shopping list** | gemerkte Items; geplante Rezepte mit einer Liste, was wo zu kaufen ist |
+
+Crafting, Vendor flips und die Haendler gibt es nur mit lokalem Abzug von ForeverDB, Buy low
+und Market reset nur mit der Preisleiter. Fehlt etwas, fehlt der Eintrag in der Navigation.
+
+**Die Annahmen** stehen in der Leiste oben und gelten ueberall:
+
+- *Sell at*: zu welchem Preis verkauft wird - zum guenstigsten Angebot von jetzt oder,
+  vorsichtiger, zum Tief der letzten 24 Stunden. Ein frischer Preissprung taeuscht dann nicht.
+- *My share of sales*: welchen Anteil der Tagesverkaeufe man sich zutraut. Daraus wird
+  `Est./day`: Gewinn je Stueck mal diesem Anteil, bei Rezepten gedeckelt durch die Abklingzeit.
+
+**Buy low und Market reset** rechnen auf der Preisleiter. Fuer den Reset traegt man ein, wie
+viel Gold man hat und wie viel davon hoechstens in einen einzelnen Reset fliessen darf. Je
+Item steht der lohnendste Reset, der bezahlbar ist, sich im gewaehlten Zeitraum absetzen
+laesst und mindestens 20 % Rendite bringt; das Ziel liegt knapp unter dem naechsten Angebot,
+nie mehr als 10 % ueber dem ueblichen Preis. Drei Kacheln sagen, wie viele Resets zusammen
+ins Gold passen. Zwei Marken warnen:
+
+- **Refills fast**: das Item gehoert zum Viertel des Markts, in dem je verkauftem Stueck am
+  meisten neu eingestellt wird. Gemessen wird am Markt selbst, weil ueberall mehr eingestellt
+  als verkauft wird - jedes erneute Einstellen zaehlt mit.
+- **Fallender Pfeil**: der Preis ist in 24 Stunden um 30 % oder mehr gefallen. Der uebliche
+  Preis gilt dann vielleicht nicht mehr, und ein Reset waere eine Wette auf seine Rueckkehr.
+
+**Das Item.** Ein Klick auf eine Zeile oeffnet es in der Seitenleiste, die Pfeiltasten
+blaettern, Doppelklick oder Enter oeffnet die Vollseite. Dort steht alles:
+
+- Kennzahlen: guenstigstes Angebot, ueblicher Preis, Marktwert, Median, Veraenderung,
+  Verkaeufe und Neueinstellungen am Tag, Angebote, Haendlerpreis.
+- Der Verlauf: guenstigster Preis, Median und darunter die verkaufte Menge je Stand.
+- Die Heatmap: Wochentag mal Stunde in Ortszeit, umschaltbar zwischen Preis gegenueber dem
+  ueblichen Preis und verkaufter Menge. Sie rechnet aus dem Verlauf des Zeitfensters; mit 14
+  Tagen hat jede Stunde zwei Stichproben, mit `publish --days 28` vier.
+- Die Preisleiter mit Rechner: ein Schieber waehlt, bis zu welcher Stufe gekauft wird.
+  Darunter die ganze Rechnung - Stueckzahl, Kosten, Zielpreis mit Begruendung, Erloes,
+  Gebuehr, Gewinn, Rendite, ab wann das Gold zurueck ist, Dauer des Abverkaufs, Nachschub,
+  der Verlust beim Rueckfall auf das alte Tief, die geschaetzte Einstellgebuehr - und ein
+  Urteil in einem Satz.
+- Herstellung (jede Zutat mit Preis und Bezugsquelle), Verwendung (welche Rezepte das Item
+  verbrauchen) und Haendler.
+
+Dazu: `Strg+K` sucht ueber alle Items, `/` springt ins Filterfeld, `Esc` schliesst. Unter
+*My professions* traegt man Berufe und Skill ein; Rezepte darueber erscheinen blass, und die
+Startseite laesst sich darauf beschraenken. Annahmen, Berufe, Merkliste und Einkaufsliste
+bleiben im Browser gespeichert. Seite und Item stehen in der Adresse (`#reset/3826`,
+`#item/3826`) - jede Ansicht laesst sich verlinken, und Zurueck fuehrt zurueck. Zeiten stehen
+in Ortszeit, hell und dunkel folgen dem System oder dem Knopf oben rechts.
 
 ```
 web/src/
-  lib/data.ts        liest meta.json, market.parquet und gezielt aus hourly.parquet
-  lib/rows.ts        Filtern und Sortieren als reine Funktionen
-  lib/format.ts      Gold/Silber/Kupfer, Prozente, Ortszeit fuer das Diagramm
-  components/        Markt-, Flip- und Rezept-Tabelle auf einer gemeinsamen virtuellen Tabelle,
-                     Detailansicht, Diagramm; ui/ kommt von shadcn
-  hooks/             das gewaehlte Item in der Adresse
+  lib/trade.ts       die Rechnung: Rezepte, Flips, Low Buy, Reset, Nachschub, Urteil
+  lib/app.tsx        geladene Daten, Annahmen, Berufe, Merk- und Einkaufsliste als ein Kontext
+  lib/route.ts       Seite und Item in der Adresse
+  lib/data.ts        liest die Parquet-Dateien, hourly.parquet gezielt je Item
+  lib/heat.ts        der Verlauf als Wochentag mal Stunde
+  lib/rows.ts        Suchen, Sortieren, Buendeln als reine Funktionen
+  lib/format.ts      Gold/Silber/Kupfer, Prozente, Dauer, Ortszeit fuer das Diagramm
+  pages/             eine Datei je Seite oder Gruppe von Seiten
+  components/        Tabelle, Seitenleiste, Heatmap, Preisleiter, Diagramm; ui/ kommt von shadcn
 ```
 
-Das Diagramm zeichnet TradingViews `lightweight-charts`, die Parquet-Dateien liest
-`hyparquet`. Die Diagramm-Bibliothek wird erst geladen, wenn jemand ein Item oeffnet. Sie
-steht unter Apache-2.0 und verlangt die Namensnennung samt Link, die im Diagramm und in
-der Fusszeile steht.
+Die Rechnung steht in `lib/trade.ts` als reine Funktionen und ist getestet; die Oberflaeche
+zeigt nur an, was dort herauskommt. Das Diagramm zeichnet TradingViews `lightweight-charts`,
+die Parquet-Dateien liest `hyparquet`. Die Diagramm-Bibliothek wird erst geladen, wenn
+jemand ein Item oeffnet. Sie steht unter Apache-2.0 und verlangt die Namensnennung samt Link,
+die im Diagramm und in der Fusszeile steht.
 
 Der Entwicklungsserver von Vite beantwortet Teilabrufe - ohne die muesste die Seite fuer
 jedes Diagramm die ganze `hourly.parquet` laden. `python -m http.server` kann das nicht.
 
 Die Oberflaeche ist englisch beschriftet. Namen kommen aus `names.json`; wo weder Blizzard
-noch ein lokaler Abzug von ForeverDB einen kennt, steht `Item 2589` da. Die Detailansicht zeigt ausserdem, was ein Haendler zahlt, und weist darauf
-hin, wenn das guenstigste Angebot darunter liegt.
+noch ein lokaler Abzug von ForeverDB einen kennt, steht `Item 2589` da.
+
+Was die Zahlen nicht wissen: Verkaeufe sind eine Obergrenze, weil auch zurueckgezogene
+Angebote als verkauft zaehlen. Gerechnet wird gegen Angebote, nicht gegen Preise, zu denen
+sicher verkauft wird. Die Einstellgebuehr folgt der Formel aus Classic und ist fuer Forever
+nicht bestaetigt. Und die Preisleiter ist so alt wie der letzte Lauf von `publish` - vor
+einem Kauf im Spiel nachsehen, ob die guenstigen Angebote noch da sind.
 
 ### Wie Verkaeufe entstehen
 

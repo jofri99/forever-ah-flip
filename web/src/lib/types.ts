@@ -29,6 +29,14 @@ export interface MarketRow {
   vendor_sell: number | null
   /** Listenpreis beim Haendler je Stueck. Steht bei jedem Item, auch wenn es kein Haendler fuehrt. */
   vendor_buy: number | null
+  /** Der uebliche Preis: Median des guenstigsten Angebots im Zeitfenster. Fehlt bei zu kurzer Geschichte. */
+  usual_price: number | null
+  /** Auf wie vielen Staenden der uebliche Preis beruht. */
+  usual_points: number
+  /** Wie viele Stueck in 24 Stunden neu eingestellt wurden. */
+  qty_new_24h: number | null
+  /** Marktwert des aktuellen Stands nach TSMs Verfahren. Nur mit Preisleiter. */
+  market_value: number | null
 }
 
 /** Eine Zeile aus hourly.parquet, auf die Spalten des Diagramms beschraenkt. */
@@ -59,28 +67,22 @@ export interface Meta {
   vendor_flips?: number | null
   /** Zahl der Rezepte, deren Ergebnis im Auktionshaus steht - oder null ohne Abzug. */
   crafts?: number | null
+  /** Zahl der Zeilen in item_vendors.parquet - oder null ohne Abzug der Haendler. */
+  item_vendors?: number | null
+  /** Zahl der Preisstufen in ladder.parquet - oder null ohne aktuellen Stand von Blizzard. */
+  ladder?: number | null
+  /** Von wann der aktuelle Stand ist, aus dem Preisleiter und Marktpreise stammen. */
+  live_snapshot?: string | null
 }
 
 /** Item-ID als Text -> Name. Fehlt ein Eintrag, zeigt die Seite "Item 2589". */
 export type Names = Record<string, string>
 
-export type SortKey =
-  | "name"
-  | "min_price"
-  | "median_price"
-  | "n_listings"
-  | "quantity"
-  | "change_24h_pct"
-  | "qty_sold_24h"
-  | "value_sold_24h"
-
-export interface Sort<K extends string = SortKey> {
+export interface Sort<K extends string = string> {
   key: K
   /** 1 aufsteigend, -1 absteigend. */
   dir: 1 | -1
 }
-
-export type KindFilter = "all" | Kind
 
 /** Eine Zeile aus vendor_flips.parquet: beim Haendler kaufen, im Auktionshaus verkaufen. */
 export interface VendorFlip {
@@ -177,23 +179,30 @@ export interface CraftReagent {
   n_vendors: number | null
 }
 
-export type CraftSortKey =
-  | "name"
-  | "profession"
-  | "skill"
-  | "cost"
-  | "ah_price"
-  | "profit"
-  | "profit_pct"
-  | "n_listings"
-  | "qty_sold_24h"
+/** Eine Zeile aus item_vendors.parquet: einer der guenstigsten Haendler, die ein Item fuehren. */
+export interface ItemVendor {
+  item_id: number
+  vendor: string
+  zone: string | null
+  price_per_item: number
+  limited: boolean
+  limited_stock: number | null
+  /** Wie viele erreichbare Haendler das Item insgesamt fuehren. */
+  n_vendors: number
+}
 
-export type FlipSortKey =
-  | "name"
-  | "vendor_price"
-  | "ah_price"
-  | "profit"
-  | "profit_pct"
-  | "n_listings"
-  | "qty_sold_24h"
-  | "vendor"
+/** Eine Zeile aus ladder.parquet: eine Stufe der Preisleiter. */
+export interface LadderRow {
+  item_id: number
+  price: number
+  quantity: number
+}
+
+/** Wie gut der Nutzer einen Beruf beherrscht: Beruf -> Skill. */
+export type Professions = Record<string, number>
+
+/** Eine Zeile der Einkaufsliste: ein Rezept und wie oft es hergestellt werden soll. */
+export interface CartLine {
+  recipeId: number
+  quantity: number
+}

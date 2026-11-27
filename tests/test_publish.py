@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from collector import foreverdb_dump, publish, store
+from collector.blizzard import ApiResponse
 from collector.config import Settings
 
 T0 = dt.datetime(2026, 11, 14, 10, 0, 0)
@@ -223,11 +224,131 @@ def test_vendor_flips_exist_only_with_a_local_vendor_dump(warehouse: Settings, t
     types = dict(query(out / publish.VENDOR_FLIPS, "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM FILE)"))
     assert "BIGINT" not in types.values()
 
+    # Dazu je Item die guenstigsten erreichbaren Haendler - der der Allianz fehlt.
+    assert meta["item_vendors"] == 2
+    assert query(out / publish.ITEM_VENDORS, "SELECT item_id, vendor, zone, price_per_item, limited, limited_stock, n_vendors FROM FILE") == [
+        (100, "Horde Vendor", "Orgrimmar", 200.0, True, 1, 1),
+        (300, "Horde Vendor", "Orgrimmar", 98.0, False, None, 1),
+    ]
+
     # Verschwindet der Abzug, darf keine veraltete Datei liegen bleiben.
     (directory / foreverdb_dump.VENDOR_DETAILS_FILE).unlink()
     meta = publish.build(warehouse, out_dir=out)
     assert meta["vendor_flips"] is None
     assert not (out / publish.VENDOR_FLIPS).exists()
+    assert not (out / publish.ITEM_VENDORS).exists()
+
+
+class FakeLive:
+    """Der aktuelle Stand, wie Blizzard ihn liefert: zwei Dateien mit jedem einzelnen Angebot."""
+
+    def __init__(self, stamp: dt.datetime, auctions: list[dict], commodities: list[dict], status: int = 200) -> None:
+        self.stamp, self.auction_rows, self.commodity_rows, self.status = stamp, auctions, commodities, status
+
+    def _respond(self, rows: list[dict], stream_to: Path) -> ApiResponse:
+        if self.status != 200:
+            return ApiResponse(status=self.status, url="fake")
+        stream_to.parent.mkdir(parents=True, exist_ok=True)
+        stream_to.write_text(json.dumps({"auctions": rows}), encoding="utf-8")
+        return ApiResponse(status=200, url="fake", headers={"last-modified": store.http_date(self.stamp)}, path=stream_to)
+
+    def auctions(self, ruleset, house, stream_to=None, if_modified_since=None) -> ApiResponse:
+        return self._respond(self.auction_rows, stream_to)
+
+    def commodities(self, ruleset, house, stream_to=None, if_modified_since=None) -> ApiResponse:
+        return self._respond(self.commodity_rows, stream_to)
+
+
+def test_market_value_ignores_bargains_and_overpriced_walls() -> None:
+    # Das Beispiel aus der Doku von TSM: von 23 Stueck zaehlen die guenstigsten 30 %,
+    # das einzelne Schnaeppchen fuer 5 faellt als Ausreisser weg, der Rest ergibt 14,5.
+    assert publish.market_value([(5, 1), (13, 2), (15, 3), (16, 1), (20, 16)]) == pytest.approx(14.5)
+    # Nach den ersten 15 % endet die Betrachtung an einem Preissprung von 20 % oder mehr.
+    assert publish.market_value([(10, 2), (13, 2), (50, 6)]) == pytest.approx(10.0)
+    # Ein kleinerer Schritt zaehlt noch mit, bis die 30 % voll sind.
+    assert publish.market_value([(10, 2), (11, 2), (50, 6)]) == pytest.approx(31 / 3)
+    assert publish.market_value([(100, 1)]) == 100
+    assert publish.market_value([]) is None
+
+
+def test_live_snapshot_becomes_the_market_and_yields_the_price_ladder(warehouse: Settings, tmp_path: Path) -> None:
+    out = tmp_path / "site"
+    live_at = T2 + dt.timedelta(minutes=40)
+    client = FakeLive(
+        live_at,
+        auctions=[
+            {"id": 1, "item": {"id": 100}, "buyout": 400, "quantity": 1, "time_left": "LONG"},
+            {"id": 2, "item": {"id": 100}, "buyout": 700, "quantity": 1, "time_left": "LONG"},
+            # Ein Item, das es in keinem gespeicherten Stand gab.
+            {"id": 3, "item": {"id": 555}, "buyout": 50, "quantity": 1, "time_left": "SHORT"},
+            # Nur ein Gebot, kein Sofortkauf: zaehlt fuer keinen Preis.
+            {"id": 4, "item": {"id": 100}, "buyout": 0, "bid": 10, "quantity": 1, "time_left": "LONG"},
+        ],
+        commodities=[
+            {"id": 10, "item": {"id": 300}, "unit_price": 95, "quantity": 20, "time_left": "LONG"},
+            {"id": 11, "item": {"id": 300}, "unit_price": 95, "quantity": 5, "time_left": "LONG"},
+            {"id": 12, "item": {"id": 300}, "unit_price": 120, "quantity": 10, "time_left": "LONG"},
+        ],
+    )
+
+    meta = publish.build(warehouse, out_dir=out, client=client)
+
+    assert meta["live_snapshot"] == "2026-11-14T12:40:00Z"
+    assert meta["last_snapshot"] == "2026-11-14T12:00:00Z"       # der Verlauf endet beim gespeicherten Stand
+    assert meta["ladder"] == 5
+
+    # Die Preisleiter: je Item und Preis die Menge, gleiche Preise zusammengefasst.
+    assert query(out / publish.LADDER, "SELECT item_id, price, quantity FROM FILE") == [
+        (100, 400.0, 1.0), (100, 700.0, 1.0), (300, 95.0, 25.0), (300, 120.0, 10.0), (555, 50.0, 1.0),
+    ]
+    types = dict(query(out / publish.LADDER, "SELECT column_name, column_type FROM (DESCRIBE SELECT * FROM FILE)"))
+    assert "BIGINT" not in types.values()
+
+    rows = {
+        r[0]: r[1:]
+        for r in query(
+            out / publish.MARKET,
+            "SELECT item_id, ts, min_price, n_listings, quantity, open_24h, change_24h_pct, qty_sold_24h, "
+            "market_value, usual_price, usual_points FROM FILE",
+        )
+    }
+    # Preise und Mengen kommen aus dem aktuellen Stand, der Vergleich ueber 24 Stunden aus dem Verlauf.
+    assert rows[100] == (epoch(live_at), 400.0, 2, 2.0, 500.0, -20.0, 1.0, 400.0, None, 3)
+    assert rows[300] == (epoch(live_at), 95.0, 3, 35.0, 90.0, 5.6, 42.0, 95.0, None, 3)
+    # Das neue Item hat einen Preis, aber noch keine Geschichte.
+    assert rows[555] == (epoch(live_at), 50.0, 1, 1.0, None, None, None, 50.0, None, 0)
+
+    # Ohne aktuellen Stand gilt wieder der gespeicherte, und die alte Preisleiter verschwindet.
+    meta = publish.build(warehouse, out_dir=out)
+    assert meta["ladder"] is None and meta["live_snapshot"] is None
+    assert not (out / publish.LADDER).exists()
+    assert query(out / publish.MARKET, "SELECT item_id, min_price, market_value FROM FILE") == [
+        (100, 550.0, None), (300, 99.0, None),
+    ]
+
+    # Liefert Blizzard den Stand nicht, ist das ein klarer Fehler und kein halber Bau.
+    with pytest.raises(RuntimeError, match="HTTP 503"):
+        publish.build(warehouse, out_dir=out, client=FakeLive(live_at, [], [], status=503))
+
+
+def test_usual_price_needs_enough_snapshots(settings: Settings, tmp_path: Path) -> None:
+    # 24 Staende: zwoelfmal 100, zwoelfmal 200 - der uebliche Preis ist die Mitte.
+    start = dt.datetime(2026, 11, 14, 0, 0, 0)
+    for hour in range(24):
+        ts = start + dt.timedelta(hours=hour)
+        write_items(settings, ts, [(100, "auction", 1, 1, 100 if hour < 12 else 200, 300), (300, "commodity", 1, 1, 50, 50)])
+    # Das zweite Item kommt erst spaeter dazu und hat zu wenig Geschichte.
+    out = tmp_path / "site"
+    publish.build(settings, out_dir=out)
+    assert query(out / publish.MARKET, "SELECT item_id, usual_price, usual_points FROM FILE") == [
+        (100, 150.0, 24), (300, 50.0, 24),
+    ]
+
+    settings2_out = tmp_path / "short"
+    publish.build(settings, out_dir=settings2_out, days=0.4)       # nur die letzten knapp zehn Stunden
+    assert query(settings2_out / publish.MARKET, "SELECT item_id, usual_price, usual_points FROM FILE") == [
+        (100, None, 10), (300, None, 10),
+    ]
 
 
 def recipe_line(spell_id: int, name: str, item_id: int, count: int, reagents: str) -> str:

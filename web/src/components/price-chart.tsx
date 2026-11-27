@@ -6,7 +6,7 @@ import {
   LineSeries,
   LineStyle,
 } from "lightweight-charts"
-import type { IChartApi, ISeriesApi, UTCTimestamp } from "lightweight-charts"
+import type { IChartApi, IPriceLine, ISeriesApi, UTCTimestamp } from "lightweight-charts"
 
 import { LOCALE, moneyShort, toLocalChartTime } from "@/lib/format"
 import type { SeriesPoint } from "@/lib/types"
@@ -52,13 +52,22 @@ interface ChartParts {
 
 const chartTime = (ts: number) => toLocalChartTime(ts) as UTCTimestamp
 
+interface PriceChartProps {
+  series: SeriesPoint[]
+  /** Hoehe in Pixeln: in der Seitenleiste klein, auf der Vollseite gross. */
+  height?: number
+  /** Der uebliche Preis als gestrichelte Linie quer durchs Diagramm. */
+  usual?: number | null
+}
+
 /**
  * Oben guenstigster Preis und Median, darunter Balken: die verkaufte Menge je
  * Stand, oder die Zahl der Angebote, solange es keine Verkaufsdaten gibt.
  */
-export function PriceChart({ series }: { series: SeriesPoint[] }) {
+export function PriceChart({ series, height = 400, usual = null }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const partsRef = useRef<ChartParts | null>(null)
+  const usualRef = useRef<IPriceLine | null>(null)
 
   useEffect(() => {
     const container = containerRef.current
@@ -87,7 +96,7 @@ export function PriceChart({ series }: { series: SeriesPoint[] }) {
       { color: themeColor("--bars"), priceFormat: { type: "volume" } },
       1,
     )
-    chart.panes()[1]?.setHeight(110)
+    chart.panes()[1]?.setHeight(height < 300 ? 60 : 110)
     partsRef.current = { chart, min, median, bars }
 
     // Wechselt das Theme, zieht das Diagramm die Farben nach.
@@ -103,7 +112,10 @@ export function PriceChart({ series }: { series: SeriesPoint[] }) {
       observer.disconnect()
       chart.remove()
       partsRef.current = null
+      usualRef.current = null
     }
+    // Die Hoehe steht beim Einhaengen fest; das Diagramm wird je Item neu angelegt.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
@@ -133,5 +145,22 @@ export function PriceChart({ series }: { series: SeriesPoint[] }) {
     chart.timeScale().fitContent()
   }, [series])
 
-  return <div ref={containerRef} className="h-[400px] w-full" />
+  useEffect(() => {
+    const min = partsRef.current?.min
+    if (!min) return
+    if (usualRef.current) min.removePriceLine(usualRef.current)
+    usualRef.current =
+      usual == null
+        ? null
+        : min.createPriceLine({
+            price: usual,
+            color: themeColor("--muted-foreground"),
+            lineWidth: 1,
+            lineStyle: LineStyle.LargeDashed,
+            axisLabelVisible: true,
+            title: "usual",
+          })
+  }, [usual])
+
+  return <div ref={containerRef} className="w-full" style={{ height }} />
 }

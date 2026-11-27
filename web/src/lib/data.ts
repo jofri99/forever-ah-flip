@@ -6,10 +6,13 @@ import {
 } from "hyparquet"
 import type { AsyncBuffer, FileMetaData } from "hyparquet"
 
+import type { Tier } from "./trade"
 import type {
   Craft,
   CraftReagent,
+  ItemVendor,
   Kind,
+  LadderRow,
   MarketRow,
   Meta,
   Names,
@@ -115,6 +118,34 @@ export function loadCrafts(meta: Meta): Promise<Craft[]> {
 /** Die Zutaten zu diesen Rezepten. */
 export function loadCraftReagents(meta: Meta): Promise<CraftReagent[]> {
   return loadOptional<CraftReagent>("craft_reagents.parquet", meta, meta.crafts != null)
+}
+
+/** Je Item die guenstigsten erreichbaren Haendler - nur mit lokalem Abzug der Haendler. */
+export async function loadItemVendors(meta: Meta): Promise<Map<number, ItemVendor[]>> {
+  const rows = await loadOptional<ItemVendor>("item_vendors.parquet", meta, meta.item_vendors != null)
+  const vendors = new Map<number, ItemVendor[]>()
+  for (const row of rows) {
+    const list = vendors.get(row.item_id)
+    if (list) list.push(row)
+    else vendors.set(row.item_id, [row])
+  }
+  return vendors
+}
+
+/**
+ * Die Preisleiter: je Item die Stufen von unten nach oben. Es gibt sie nur, wenn beim
+ * Bauen der aktuelle Stand von Blizzard geholt wurde. Die Datei ist nach Item und Preis
+ * sortiert, die Stufen kommen also schon in der richtigen Reihenfolge.
+ */
+export async function loadLadder(meta: Meta): Promise<Map<number, Tier[]>> {
+  const rows = await loadOptional<LadderRow>("ladder.parquet", meta, meta.ladder != null)
+  const ladder = new Map<number, Tier[]>()
+  for (const row of rows) {
+    const tiers = ladder.get(row.item_id)
+    if (tiers) tiers.push([row.price, row.quantity])
+    else ladder.set(row.item_id, [[row.price, row.quantity]])
+  }
+  return ladder
 }
 
 /** Namen sind optional. meta.json sagt, ob es die Datei gibt. */

@@ -76,6 +76,10 @@ def build_parser() -> argparse.ArgumentParser:
     publish.add_argument("--days", type=int, default=14, help="Zeitfenster in Tagen (Vorgabe 14)")
     publish.add_argument("--out", type=Path, default=None, help="Zielordner (Vorgabe web/public/data)")
     publish.add_argument("--house", type=int, default=None, help="Auktionshaus (Vorgabe 114)")
+    publish.add_argument(
+        "--no-live", action="store_true",
+        help="den aktuellen Stand nicht von Blizzard holen: keine Preisleiter, juengster Stand ist der gespeicherte",
+    )
 
     return parser
 
@@ -189,11 +193,13 @@ def main(argv: list[str] | None = None) -> int:
             return 1
         return 0
 
-    # publish liest nur das Warehouse und braucht keine Zugangsdaten.
+    # publish liest das Warehouse. Mit Zugangsdaten holt es dazu den aktuellen Stand, ohne geht es auch.
     if args.command == "publish":
         from . import publish as publish_module
 
-        return publish_module.main(config, out_dir=args.out, house=args.house, days=args.days)
+        return publish_module.main(
+            config, out_dir=args.out, house=args.house, days=args.days, live=not args.no_live
+        )
 
     try:
         config.require_credentials()

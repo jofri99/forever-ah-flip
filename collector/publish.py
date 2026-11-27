@@ -10,11 +10,19 @@ eine Form, die ein Browser mit wenigen Teilabrufen lesen kann:
     market.parquet   der juengste Stand, eine Zeile je Item, dazu 24-Stunden-Werte.
     meta.json        was drin ist und von wann.
 
+Mit Zugangsdaten holt `publish` ausserdem den aktuellen Stand direkt von Blizzard, mit
+jedem einzelnen Angebot. Daraus entsteht die Preisleiter:
+
+    ladder.parquet   je Item und Preis die angebotene Menge, von unten nach oben.
+                     Erst damit laesst sich rechnen, was ein Aufkauf kostet - die
+                     gespeicherten Kennzahlen verraten das nicht.
+
 Mit einem lokalen Abzug von ForeverDB kommen dazu:
 
     vendor_flips.parquet    beim Haendler kaufen, im Auktionshaus verkaufen
     crafts.parquet          je Rezept Kosten, Erloes und Gewinn
     craft_reagents.parquet  die Zutaten dieser Rezepte mit Preis und Bezugsquelle
+    item_vendors.parquet    je Item die guenstigsten erreichbaren Haendler
 
 Diese Dateien sind abgeleitet und jederzeit neu baubar. Sie gehoeren deshalb
 nicht ins Warehouse und nicht in Git.
@@ -24,12 +32,14 @@ from __future__ import annotations
 
 import datetime as dt
 import json
+import math
+from email.utils import parsedate_to_datetime
 from pathlib import Path
 from typing import Any
 
 import duckdb
 
-from . import crafting, foreverdb_dump, names, store
+from . import collect, crafting, foreverdb_dump, names, store
 from .config import ROOT, Settings
 
 HOURLY = "hourly.parquet"
@@ -39,6 +49,13 @@ NAMES = "names.json"      # optional: {"2589": "Leinenstoff", ...}
 VENDOR_FLIPS = "vendor_flips.parquet"   # optional, nur mit lokalem Abzug von ForeverDB
 CRAFTS = "crafts.parquet"               # ebenso: braucht den Abzug der Rezepte
 CRAFT_REAGENTS = "craft_reagents.parquet"
+ITEM_VENDORS = "item_vendors.parquet"   # ebenso: braucht den Abzug der Haendler
+LADDER = "ladder.parquet"               # optional: braucht den aktuellen Stand von Blizzard
+
+# Ab so vielen Staenden gilt der uebliche Preis eines Items als belastbar.
+USUAL_MIN_POINTS = 24
+# So viele Haendler je Item reichen der Anzeige; wie viele es insgesamt sind, steht daneben.
+VENDORS_PER_ITEM = 3
 
 # Gesammelt wird das Auktionshaus der Horde. Haendler dieser Fraktion sind von dort
 # aus nicht erreichbar.
@@ -119,6 +136,92 @@ def _load_local_list(con: duckdb.DuckDBPyConnection, settings: Settings) -> None
     )
 
 
+def market_value(tiers: list[tuple[float, float]]) -> float | None:
+    """Der Marktwert eines Stands nach dem Verfahren von TSMs AuctionDB.
+
+    `tiers` sind (Preis, Menge), aufsteigend nach Preis. Betrachtet werden die guenstigsten
+    30 % der Stuecke. Nach den ersten 15 % endet die Betrachtung an einem Preissprung von
+    20 % oder mehr. Was dann noch mehr als 1,5 Standardabweichungen vom Mittel liegt, faellt
+    weg; der Rest wird gemittelt. So zaehlt weder ein einzelnes Schnaeppchen noch eine Wand
+    ueberteuerter Angebote.
+    """
+    total = sum(qty for _, qty in tiers)
+    if total <= 0:
+        return None
+    limit, early = max(1, math.ceil(total * 0.30)), total * 0.15
+    kept: list[tuple[float, float]] = []
+    seen, previous = 0.0, None
+    for price, qty in tiers:
+        if seen >= limit or (previous is not None and seen >= early and price >= previous * 1.2):
+            break
+        take = min(qty, limit - seen)
+        kept.append((price, take))
+        seen += take
+        previous = price
+    count = sum(qty for _, qty in kept)
+    mean = sum(price * qty for price, qty in kept) / count
+    deviation = math.sqrt(sum(qty * (price - mean) ** 2 for price, qty in kept) / count)
+    inside = [(price, qty) for price, qty in kept if abs(price - mean) <= 1.5 * deviation] or kept
+    return sum(price * qty for price, qty in inside) / sum(qty for _, qty in inside)
+
+
+def _empty_live(con: duckdb.DuckDBPyConnection) -> None:
+    con.execute(
+        "CREATE OR REPLACE TEMP TABLE live (item_id INTEGER, kind VARCHAR, min_price DOUBLE, "
+        "p25_price DOUBLE, median_price DOUBLE, n_listings INTEGER, quantity DOUBLE)"
+    )
+    con.execute("CREATE OR REPLACE TEMP TABLE ladder (item_id INTEGER, price DOUBLE, quantity DOUBLE)")
+    con.execute("CREATE OR REPLACE TEMP TABLE mv (item_id INTEGER, market_value DOUBLE)")
+
+
+def _load_live(con: duckdb.DuckDBPyConnection, settings: Settings, house: int, client: Any) -> int:
+    """Holt den aktuellen Stand mit allen Angeboten und baut daraus `live`, `ladder` und `mv`.
+
+    Gibt zurueck, von wann der Stand ist (Unix-Sekunden). Die heruntergeladenen Dateien
+    liegen unter data/raw/publish und werden beim naechsten Lauf ueberschrieben.
+    """
+    raw = settings.raw_dir / "publish"
+    auctions = client.auctions(settings.ruleset, house, stream_to=raw / f"house{house}_auctions.json")
+    if auctions.status != 200:
+        raise RuntimeError(f"Blizzard liefert den aktuellen Stand nicht (HTTP {auctions.status}).")
+    commodities = client.commodities(settings.ruleset, house, stream_to=raw / f"house{house}_commodities.json")
+    collect.load_snapshot(
+        con, raw / f"house{house}_auctions.json",
+        raw / f"house{house}_commodities.json" if commodities.status == 200 else None,
+    )
+    _empty_live(con)
+    con.execute(
+        """
+        INSERT INTO live
+        SELECT item_id, kind, min(unit_price), round(quantile_cont(unit_price, 0.25)),
+               round(median(unit_price)), count(*), sum(quantity)
+        FROM snap WHERE unit_price > 0 GROUP BY item_id, kind;
+
+        INSERT INTO ladder
+        SELECT item_id, unit_price, sum(quantity) FROM snap WHERE unit_price > 0 GROUP BY item_id, unit_price;
+        """
+    )
+    # Der Marktwert braucht die Stufen der Reihe nach - das rechnet sich in Python leichter.
+    values: list[tuple[int, float]] = []
+    current, tiers = None, []
+    for item_id, price, qty in con.execute("SELECT item_id, price, quantity FROM ladder ORDER BY item_id, price").fetchall():
+        if item_id != current:
+            if tiers:
+                values.append((current, round(market_value(tiers) or 0)))
+            current, tiers = item_id, []
+        tiers.append((price, qty))
+    if tiers:
+        values.append((current, round(market_value(tiers) or 0)))
+    if values:
+        con.executemany("INSERT INTO mv VALUES (?, ?)", values)
+
+    stamp = auctions.header("last-modified")
+    try:
+        return int(parsedate_to_datetime(stamp).timestamp()) if stamp else int(dt.datetime.now(dt.timezone.utc).timestamp())
+    except (TypeError, ValueError):
+        return int(dt.datetime.now(dt.timezone.utc).timestamp())
+
+
 def _build_hourly(con: duckdb.DuckDBPyConnection, since: dt.datetime) -> int:
     """Eine Zeile je Item und Stand. Zeit als Unix-Sekunden, Preise als DOUBLE:
     beides kommt im Browser als gewoehnliche Zahl an, ohne BigInt und ohne Datumsobjekte."""
@@ -148,18 +251,37 @@ def _build_hourly(con: duckdb.DuckDBPyConnection, since: dt.datetime) -> int:
     return con.execute("SELECT count(*) FROM hourly").fetchone()[0]
 
 
-def _build_market(con: duckdb.DuckDBPyConnection) -> int:
-    """Der juengste Stand mit dem, was eine Uebersichtstabelle braucht."""
+def _build_market(con: duckdb.DuckDBPyConnection, live_ts: int | None = None) -> int:
+    """Der juengste Stand mit dem, was eine Uebersichtstabelle braucht.
+
+    Mit `live_ts` gilt als juengster Stand der eben von Blizzard geholte (Tabelle `live`),
+    sonst der letzte gespeicherte. Die Werte der letzten 24 Stunden kommen immer aus dem
+    gespeicherten Verlauf.
+    """
+    current = (
+        f"SELECT item_id, kind, {int(live_ts)}::INTEGER AS ts, min_price, p25_price, median_price, n_listings, quantity FROM live"
+        if live_ts is not None
+        else "SELECT h.item_id, h.kind, h.ts, h.min_price, h.p25_price, h.median_price, h.n_listings, h.quantity "
+             "FROM hourly h, latest WHERE h.ts = latest.ts"
+    )
     con.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP TABLE market AS
         WITH latest AS (SELECT max(ts) AS ts FROM hourly),
-        cur AS (SELECT h.* FROM hourly h, latest WHERE h.ts = latest.ts),
+        cur AS ({current}),
+        -- Der uebliche Preis: der Median des guenstigsten Angebots ueber alle Staende des Fensters.
+        usual AS (
+            SELECT item_id, round(median(p)) AS usual_price, count(*)::INTEGER AS usual_points
+            FROM (SELECT item_id, ts, min(min_price) AS p FROM hourly WHERE min_price > 0 GROUP BY item_id, ts)
+            GROUP BY item_id
+        ),
         day AS (
             SELECT h.item_id, h.kind,
                    count(*)::INTEGER             AS snapshots_24h,
                    sum(h.qty_sold)               AS qty_sold_24h,
                    sum(h.value_sold)             AS value_sold_24h,
+                   -- Wie viel neu eingestellt wurde: daran haengt, ob ein Reset haelt.
+                   sum(h.qty_new)                AS qty_new_24h,
                    -- Wie viele der 24 Stunden ueberhaupt durch Vergleiche gedeckt sind.
                    -- Steht hier 6, sind die Verkaufszahlen ein Viertel der Wahrheit.
                    sum(h.gap_hours) FILTER (WHERE h.n_sold IS NOT NULL)::FLOAT
@@ -185,9 +307,16 @@ def _build_market(con: duckdb.DuckDBPyConnection) -> int:
                -- steht bei jedem Item, auch wenn es kein Haendler fuehrt.
                coalesce(k.sell_price, fd.sell_price)::DOUBLE AS vendor_sell,
                (k.purchase_price::DOUBLE / greatest(coalesce(k.purchase_quantity, 1), 1))
-                   AS vendor_buy
+                   AS vendor_buy,
+               CASE WHEN u.usual_points >= {USUAL_MIN_POINTS} THEN u.usual_price END::DOUBLE AS usual_price,
+               coalesce(u.usual_points, 0)::INTEGER        AS usual_points,
+               day.qty_new_24h,
+               -- Nur mit dem aktuellen Stand von Blizzard: der Marktwert nach TSMs Verfahren.
+               mv.market_value
         FROM cur
         LEFT JOIN day ON day.item_id = cur.item_id AND day.kind = cur.kind
+        LEFT JOIN usual u ON u.item_id = cur.item_id
+        LEFT JOIN mv ON mv.item_id = cur.item_id
         LEFT JOIN known k ON k.item_id = cur.item_id AND k.status = 200
         LEFT JOIN fdb_details fd ON fd.item_id = cur.item_id
         LEFT JOIN fdb_list fl ON fl.item_id = cur.item_id
@@ -255,6 +384,25 @@ def _build_vendor_flips(con: duckdb.DuckDBPyConnection) -> int:
         """
     )
     return con.execute("SELECT count(*) FROM vendor_flips").fetchone()[0]
+
+
+def _build_item_vendors(con: duckdb.DuckDBPyConnection) -> int:
+    """Je Item die guenstigsten erreichbaren Haendler und wie viele es insgesamt fuehren."""
+    hubs = ", ".join(f"'{zone}'" for zone in crafting.HUBS)
+    con.execute(
+        f"""
+        CREATE OR REPLACE TEMP TABLE item_vendors AS
+        SELECT item_id::INTEGER AS item_id, vendor, zone, price_per_item::DOUBLE AS price_per_item,
+               limited, limited_stock::INTEGER AS limited_stock,
+               (count(*) OVER (PARTITION BY item_id))::INTEGER AS n_vendors
+        FROM vendor_offers
+        QUALIFY row_number() OVER (
+            PARTITION BY item_id
+            ORDER BY price_per_item, coalesce(zone IN ({hubs}), false) DESC, vendor_id
+        ) <= {VENDORS_PER_ITEM}
+        """
+    )
+    return con.execute("SELECT count(*) FROM item_vendors").fetchone()[0]
 
 
 def _build_crafts(con: duckdb.DuckDBPyConnection, settings: Settings) -> int | None:
@@ -325,7 +473,11 @@ def build(
     out_dir: Path = DEFAULT_OUT,
     house: int | None = None,
     days: int = DEFAULT_DAYS,
+    client: Any = None,
 ) -> dict[str, Any]:
+    """Baut alle Dateien. Mit `client` wird zusaetzlich der aktuelle Stand von Blizzard geholt:
+    er wird zum juengsten Stand des Markts, und aus seinen Angeboten entsteht die Preisleiter.
+    """
     house = house or settings.house
     out_dir = Path(out_dir)
 
@@ -340,7 +492,9 @@ def build(
         names.load_known(con, settings.warehouse_dir, settings.locale)
         _load_local_details(con, settings)
         _load_local_list(con, settings)
-        market_rows = _build_market(con)
+        _empty_live(con)
+        live_ts = _load_live(con, settings, house, client) if client is not None else None
+        market_rows = _build_market(con, live_ts)
 
         store.write_parquet(
             con, "hourly", out_dir / HOURLY,
@@ -354,7 +508,25 @@ def build(
 
         # Haendler-Flips gibt es nur mit dem lokalen Abzug. Eine alte Datei darf nicht
         # liegen bleiben, wenn der Abzug fehlt - sie wuerde veraltete Zahlen zeigen.
-        flip_rows = _build_vendor_flips(con) if _load_vendor_offers(con, settings) else None
+        # Die Preisleiter gibt es nur mit dem aktuellen Stand. Ohne ihn darf keine alte liegen bleiben.
+        ladder_rows = None
+        if live_ts is None:
+            (out_dir / LADDER).unlink(missing_ok=True)
+        else:
+            ladder_rows = store.write_parquet(
+                con, "ladder", out_dir / LADDER, order_by="item_id, price", compression=COMPRESSION,
+            )
+
+        has_vendors = _load_vendor_offers(con, settings)
+        flip_rows = _build_vendor_flips(con) if has_vendors else None
+        vendor_rows = _build_item_vendors(con) if has_vendors else None
+        if vendor_rows is None:
+            (out_dir / ITEM_VENDORS).unlink(missing_ok=True)
+        else:
+            store.write_parquet(
+                con, "item_vendors", out_dir / ITEM_VENDORS,
+                order_by="item_id, price_per_item", compression=COMPRESSION,
+            )
         if flip_rows is None:
             (out_dir / VENDOR_FLIPS).unlink(missing_ok=True)
         else:
@@ -386,7 +558,10 @@ def build(
         item_names = {**fallback, **official}
         # Nur Items, die im Zeitfenster vorkommen. ForeverDB kennt 23.770 Items, die
         # Seite zeigt gut 6.000 - der Rest waere bei jedem Laden mitgeschleppter Ballast.
-        shown = {str(row[0]) for row in con.execute("SELECT DISTINCT item_id FROM hourly").fetchall()}
+        shown = {
+            str(row[0])
+            for row in con.execute("SELECT item_id FROM hourly UNION SELECT item_id FROM market").fetchall()
+        }
         item_names = {item_id: name for item_id, name in item_names.items() if item_id in shown}
         names_file = out_dir / NAMES
         if item_names:
@@ -422,6 +597,10 @@ def build(
         # Die Seite zeigt die Ansicht nur, wenn hier eine Zahl steht.
         "vendor_flips": flip_rows,
         "crafts": craft_rows,
+        "item_vendors": vendor_rows,
+        # Die Preisleiter und von wann sie ist - oder null ohne aktuellen Stand.
+        "ladder": ladder_rows,
+        "live_snapshot": _iso(live_ts),
         "name_sources": {"blizzard": named_official, "foreverdb": named_in_market - named_official},
         "files": {
             HOURLY: {
@@ -437,9 +616,30 @@ def build(
     return meta
 
 
-def main(settings: Settings, out_dir: Path | None = None, house: int | None = None, days: int = DEFAULT_DAYS) -> int:
+def main(
+    settings: Settings,
+    out_dir: Path | None = None,
+    house: int | None = None,
+    days: int = DEFAULT_DAYS,
+    live: bool = True,
+) -> int:
+    # Den aktuellen Stand gibt es nur mit Zugangsdaten. Fehlen sie oder ist Blizzard nicht
+    # erreichbar, entstehen die uebrigen Dateien trotzdem - nur eben ohne Preisleiter.
+    client = None
+    if live and settings.client_id and settings.client_secret:
+        from .blizzard import BlizzardClient
+
+        client = BlizzardClient(settings)
     try:
-        meta = build(settings, out_dir=out_dir or DEFAULT_OUT, house=house, days=days)
+        try:
+            meta = build(settings, out_dir=out_dir or DEFAULT_OUT, house=house, days=days, client=client)
+        except RuntimeError:
+            raise
+        except Exception as exc:  # Netz, Anmeldung: kein Grund, gar nichts zu bauen
+            if client is None:
+                raise
+            print(f"Aktueller Stand nicht geholt ({exc}) - baue ohne Preisleiter.")
+            meta = build(settings, out_dir=out_dir or DEFAULT_OUT, house=house, days=days)
     except RuntimeError as exc:
         print(exc)
         return 1
@@ -458,6 +658,10 @@ def main(settings: Settings, out_dir: Path | None = None, house: int | None = No
         print(f"  {VENDOR_FLIPS:<15} {meta['vendor_flips']:>9,} Zeilen")
     if meta["crafts"] is not None:
         print(f"  {CRAFTS:<15} {meta['crafts']:>9,} Zeilen")
+    if meta["ladder"] is not None:
+        print(f"  {LADDER:<15} {meta['ladder']:>9,} Preisstufen, Stand von {meta['live_snapshot']}")
+    else:
+        print("  ohne Preisleiter: kein aktueller Stand von Blizzard (Zugangsdaten oder --no-live)")
     sources = meta["name_sources"]
     print(
         f"  Namen fuer {meta['items_with_name']:,} von {meta['items']:,} Items "
