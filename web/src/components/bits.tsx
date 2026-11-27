@@ -4,9 +4,9 @@ import { Minus, Plus, Star, Timer, TrendingDown, TrendingUp } from "lucide-react
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
 import { Switch } from "@/components/ui/switch"
-import { formatDuration, formatInt } from "@/lib/format"
+import { formatDuration, formatInt, formatRatio } from "@/lib/format"
 import { hasCooldown } from "@/lib/rows"
-import { isFalling, isSpiked } from "@/lib/trade"
+import { isDowntrend, isFalling, isSpiked } from "@/lib/trade"
 import type { Basis } from "@/lib/trade"
 import type { Craft, MarketRow } from "@/lib/types"
 
@@ -142,6 +142,20 @@ export function FallBadge({ row }: { row: MarketRow | undefined }) {
     >
       <TrendingDown aria-hidden />
       {pct}%
+    </Badge>
+  )
+}
+
+/** Der Preis faellt seit Tagen gleichmaessig: ein Trend, kein Ausreisser nach unten. */
+export function TrendBadge({ row }: { row: MarketRow | undefined }) {
+  if (!row || !isDowntrend(row) || row.trend_pct_day == null) return null
+  return (
+    <Badge
+      variant="outline"
+      className={warn}
+      title={`Falling about ${formatRatio(-row.trend_pct_day)}% a day across the whole history – a trend, not a dip. The usual price is likely out of date.`}
+    >
+      Downtrend
     </Badge>
   )
 }

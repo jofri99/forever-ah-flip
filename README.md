@@ -363,7 +363,7 @@ aktuelle.
 | Datei | Inhalt |
 |---|---|
 | `hourly.parquet` | alle Staende des Zeitfensters mit Preisen, Mengen und Verkaeufen, nach Item sortiert und in Zeilengruppen von 8192 geschnitten |
-| `market.parquet` | der juengste Stand, eine Zeile je Item, dazu Tief, Hoch, Veraenderung, Verkaeufe und Neueinstellungen der letzten 24 Stunden, der uebliche Preis und - mit Preisleiter - der Marktwert |
+| `market.parquet` | der juengste Stand, eine Zeile je Item, dazu Tief, Hoch, Veraenderung, Verkaeufe und Neueinstellungen der letzten 24 Stunden, der uebliche Preis, der Trend und - mit Preisleiter - der Marktwert |
 | `ladder.parquet` | nur mit aktuellem Stand: die Preisleiter, je Item und Preis die Menge, von unten nach oben |
 | `meta.json` | Zeitraum, Anzahl Staende, Dateigroessen, von wann der aktuelle Stand ist |
 | `names.json` | Item-ID zu Name, fuer Items im Zeitfenster und im Markt |
@@ -377,7 +377,7 @@ liegt, und holt nur die. Zeit steht als Unix-Sekunden drin, Preise als `DOUBLE` 
 kommt im Browser als gewoehnliche Zahl an. Komprimiert wird mit Snappy, weil schlanke
 Parquet-Leser das ohne Zusatzpaket verstehen.
 
-Zwei Preise neben dem guenstigsten Angebot:
+Zwei Preise und ein Trend neben dem guenstigsten Angebot:
 
 - Der **uebliche Preis** (`usual_price`) ist der Median des guenstigsten Angebots ueber alle
   Staende des Zeitfensters. Er steht erst da, wenn ein Item in mindestens 24 Staenden vorkam.
@@ -386,6 +386,11 @@ Zwei Preise neben dem guenstigsten Angebot:
   AuctionDB gerechnet: die guenstigsten 30 % der Stuecke, nach den ersten 15 % Schluss bei
   einem Preissprung von 20 %, Ausreisser jenseits von 1,5 Standardabweichungen weg, der Rest
   gemittelt. So zaehlt weder ein einzelnes Schnaeppchen noch eine Wand ueberteuerter Angebote.
+- Der **Trend** ist eine Gerade durch den Logarithmus des guenstigsten Angebots ueber das
+  ganze Zeitfenster. `trend_pct_day` ist ihre Steigung als Aenderung in Prozent je Tag,
+  `trend_fit` (r2, 0 bis 1) sagt, wie genau der Verlauf ihr folgt. Beides steht erst ab 48
+  Staenden ueber drei Tage da. Ein Preis, der seit Tagen gleichmaessig faellt, hat eine
+  steile Gerade, die gut passt; ein ploetzlicher Einbruch hat eine, die schlecht passt.
 
 `sales_hours_24h` in `market.parquet` sagt, wie viele der letzten 24 Stunden durch
 Vergleiche gedeckt sind. Steht dort 6, sind die Verkaufszahlen ein Viertel der Wahrheit.
@@ -432,19 +437,24 @@ viel Gold man hat und wie viel davon hoechstens in einen einzelnen Reset fliesse
 Item steht der lohnendste Reset, der bezahlbar ist, sich im gewaehlten Zeitraum absetzen
 laesst und mindestens 20 % Rendite bringt; das Ziel liegt knapp unter dem naechsten Angebot,
 nie mehr als 10 % ueber dem ueblichen Preis. Drei Kacheln sagen, wie viele Resets zusammen
-ins Gold passen. Zwei Marken warnen:
+ins Gold passen. Drei Marken warnen:
 
 - **Refills fast**: das Item gehoert zum Viertel des Markts, in dem je verkauftem Stueck am
   meisten neu eingestellt wird. Gemessen wird am Markt selbst, weil ueberall mehr eingestellt
   als verkauft wird - jedes erneute Einstellen zaehlt mit.
 - **Fallender Pfeil**: der Preis ist in 24 Stunden um 30 % oder mehr gefallen. Der uebliche
   Preis gilt dann vielleicht nicht mehr, und ein Reset waere eine Wette auf seine Rueckkehr.
+- **Downtrend**: der Preis faellt ueber das ganze Zeitfenster um 3 % am Tag oder mehr, und
+  zwar stetig (`trend_fit` ab 0,5). Dann ist ein Angebot weit unter dem ueblichen Preis kein
+  Ausreisser nach unten, sondern der naechste Schritt abwaerts - der uebliche Preis ist nur
+  die Mitte einer fallenden Linie. Buy low laesst solche Items weg, solange *Hide downtrends*
+  an ist; die Startseite und die Zahl in der Navigation zaehlen sie nie mit.
 
 **Das Item.** Ein Klick auf eine Zeile oeffnet es in der Seitenleiste, die Pfeiltasten
 blaettern, Doppelklick oder Enter oeffnet die Vollseite. Dort steht alles:
 
 - Kennzahlen: guenstigstes Angebot, ueblicher Preis, Marktwert, Median, Veraenderung,
-  Verkaeufe und Neueinstellungen am Tag, Angebote, Haendlerpreis.
+  Trend, Verkaeufe und Neueinstellungen am Tag, Angebote, Haendlerpreis.
 - Der Verlauf: guenstigster Preis, Median und darunter die verkaufte Menge je Stand.
 - Die Heatmap: Wochentag mal Stunde in Ortszeit, umschaltbar zwischen Preis gegenueber dem
   ueblichen Preis und verkaufter Menge. Sie rechnet aus dem Verlauf des Zeitfensters; mit 14
@@ -454,6 +464,18 @@ blaettern, Doppelklick oder Enter oeffnet die Vollseite. Dort steht alles:
   Gebuehr, Gewinn, Rendite, ab wann das Gold zurueck ist, Dauer des Abverkaufs, Nachschub,
   der Verlust beim Rueckfall auf das alte Tief, die geschaetzte Einstellgebuehr - und ein
   Urteil in einem Satz.
+- *Where to relist*: zu welchem Preis das Item am besten wieder eingestellt wird. Zur Wahl
+  stehen 1c unter dem guenstigsten Angebot (verkauft sich zuerst), 1c unter jeder hoeheren
+  Stufe der Preisleiter und der uebliche Preis. Entschieden wird im Rueckblick: jede Stunde
+  des Verlaufs, in der das guenstigste Angebot hoechstens 10 % vom heutigen entfernt lag,
+  ist ein Startpunkt. Ein Preis gilt als erreicht, wenn das guenstigste Angebot in der
+  Frist (*Sell within*) bis dorthin stieg und dabei verkauft wurde - alles Guenstigere war
+  dann weg. Wurde er nicht erreicht, zaehlt der Preis am Ende der Frist. Empfohlen wird,
+  was so im Schnitt am meisten brachte, wenn es mindestens jedes zweite Mal erreicht wurde,
+  3 % mehr brachte als sofort zu verkaufen und nicht mehr als 10 % ueber dem ueblichen Preis
+  liegt. Stand der Preis im Zeitfenster noch nie da, wo er heute steht, sagt der Abschnitt
+  das und nennt nur, was sicher ist. Die Stunden ueberlappen sich: die Prozentzahlen sind
+  ein Anhalt, keine Vorhersage.
 - Herstellung (jede Zutat mit Preis und Bezugsquelle), Verwendung (welche Rezepte das Item
   verbrauchen) und Haendler.
 
@@ -474,7 +496,7 @@ web/src/
   lib/rows.ts        Suchen, Sortieren, Buendeln als reine Funktionen
   lib/format.ts      Gold/Silber/Kupfer, Prozente, Dauer, Ortszeit fuer das Diagramm
   pages/             eine Datei je Seite oder Gruppe von Seiten
-  components/        Tabelle, Seitenleiste, Heatmap, Preisleiter, Diagramm; ui/ kommt von shadcn
+  components/        Tabelle, Seitenleiste, Heatmap, Preisleiter, Einstellpreis, Diagramm; ui/ kommt von shadcn
 ```
 
 Die Rechnung steht in `lib/trade.ts` als reine Funktionen und ist getestet; die Oberflaeche

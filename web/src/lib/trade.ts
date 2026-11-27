@@ -18,6 +18,10 @@ export const MIN_PROFIT = 5_000
 export const DEPOSIT_RATE = 0.3
 /** Ab diesem Rueckgang in 24 Stunden gilt ein Preis als fallend. */
 export const FALLING_PCT = -30
+/** Ab diesem Rueckgang je Tag ueber das ganze Zeitfenster ist es ein Abwaertstrend ... */
+export const TREND_PCT_DAY = -3
+/** ... wenn der Verlauf dabei mindestens so genau einer Geraden folgt. */
+export const TREND_FIT = 0.5
 /** Ab diesem Anstieg in 24 Stunden gilt ein Preis als gerade hochgeschossen. */
 export const SPIKE_PCT = 50
 
@@ -52,7 +56,8 @@ export const DEFAULT_ASSUMPTIONS: Assumptions = {
 }
 
 const goldCopper = (a: Assumptions) => Math.max(0, a.gold) * 10_000
-const soldPerDay = (row: MarketRow) => (row.qty_sold_24h != null && row.qty_sold_24h > 0 ? row.qty_sold_24h : null)
+export const soldPerDay = (row: MarketRow) =>
+  row.qty_sold_24h != null && row.qty_sold_24h > 0 ? row.qty_sold_24h : null
 
 /**
  * Zu welchem Preis verkauft wird. Das Tief der letzten 24 Stunden ist die
@@ -70,6 +75,20 @@ export function isSpiked(row: MarketRow | undefined, basis: Basis): boolean {
 /** Faellt der Preis gerade stark, ist der uebliche Preis vielleicht schon Geschichte. */
 export function isFalling(row: MarketRow | undefined): boolean {
   return row?.change_24h_pct != null && row.change_24h_pct <= FALLING_PCT
+}
+
+/**
+ * Der Preis faellt seit Tagen gleichmaessig. Dann ist ein Angebot weit unter dem
+ * ueblichen Preis kein Ausreisser nach unten, sondern der naechste Schritt abwaerts -
+ * und der uebliche Preis nur die Mitte einer fallenden Linie.
+ */
+export function isDowntrend(row: MarketRow | undefined): boolean {
+  return (
+    row?.trend_pct_day != null &&
+    row.trend_pct_day <= TREND_PCT_DAY &&
+    row.trend_fit != null &&
+    row.trend_fit >= TREND_FIT
+  )
 }
 
 export function craftProfit(craft: Craft, row: MarketRow | undefined, basis: Basis): number | null {
@@ -346,13 +365,22 @@ export function pickResets(plans: readonly Plan[], a: Assumptions): Portfolio {
   return { picked, used, profit }
 }
 
-export type Verdict = "loss" | "too-expensive" | "falling" | "refills-fast" | "slow" | "no-sales" | "workable"
+export type Verdict =
+  | "loss"
+  | "too-expensive"
+  | "falling"
+  | "downtrend"
+  | "refills-fast"
+  | "slow"
+  | "no-sales"
+  | "workable"
 
 /** Das Urteil ueber einen Plan - das Erste, was zutrifft, in der Reihenfolge der Schwere. */
 export function verdict(p: Plan, row: MarketRow, a: Assumptions, levels: ChurnLevels): Verdict {
   if (p.profit <= 0) return "loss"
   if (p.goldShare != null && p.goldShare > 1) return "too-expensive"
   if (isFalling(row)) return "falling"
+  if (isDowntrend(row)) return "downtrend"
   if (refillsFast(row, levels)) return "refills-fast"
   if (p.days == null) return "no-sales"
   if (p.days > a.horizon) return "slow"

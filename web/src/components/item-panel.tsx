@@ -62,7 +62,7 @@ export function ItemPanel({ itemId }: { itemId: number }) {
             </Hint>
           </>
         )}
-        <TradeSection itemId={itemId} />
+        <TradeSection itemId={itemId} series={loaded.series} />
         <CraftSection itemId={itemId} />
         <UsedInSection itemId={itemId} />
         <VendorsSection itemId={itemId} />

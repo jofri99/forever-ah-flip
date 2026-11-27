@@ -5,7 +5,7 @@ import { cheapestRows, craftsByItem, groupReagents, usedIn } from "./rows"
 import { useRoute } from "./route"
 import type { Page, Route } from "./route"
 import { usePersistent } from "./settings"
-import { bestReset, churnLevels, DEFAULT_ASSUMPTIONS, lowBuy, pickResets } from "./trade"
+import { bestReset, churnLevels, DEFAULT_ASSUMPTIONS, isDowntrend, lowBuy, pickResets } from "./trade"
 import type { Assumptions, ChurnLevels, Plan, Portfolio, Tier } from "./trade"
 import type {
   CartLine,
@@ -78,6 +78,8 @@ export function deriveData(loaded: Loaded): AppData {
 /** Guenstige Einkaeufe und Resets, wie die Annahmen sie gerade ergeben. */
 export interface Trades {
   low: Plan[]
+  /** Dieselben ohne die Items im Abwaertstrend: dort ist der Preis nicht guenstig, er faellt nur. */
+  lowSteady: Plan[]
   resets: Plan[]
   portfolio: Portfolio
 }
@@ -158,7 +160,8 @@ export function AppProvider({ data, children }: { data: AppData; children: React
       const reset = bestReset(row, tiers, a)
       if (reset) resets.push(reset)
     }
-    return { low, resets, portfolio: pickResets(resets, a) }
+    const lowSteady = low.filter((p) => !isDowntrend(data.rows.get(p.itemId)))
+    return { low, lowSteady, resets, portfolio: pickResets(resets, a) }
   }, [data, a])
 
   const go = useCallback(

@@ -2,7 +2,7 @@ import { useState } from "react"
 import type { ReactNode } from "react"
 
 import { Hint, Segmented, Swatch } from "@/components/bits"
-import { GoldField } from "@/components/gold-field"
+import { GoldField } from "@/components/assumptions"
 import { Line, Lines } from "@/components/item-sections"
 import { Count, Money, Profit, Share } from "@/components/money"
 import { useApp } from "@/lib/app"
@@ -28,6 +28,12 @@ function verdictText(p: Plan, row: MarketRow, app: AppValue): string {
           ? ` and the market value is now ${Math.round((row.market_value / row.usual_price) * 100)}% of the usual ${moneyText(row.usual_price)}.`
           : ".") +
         ` That usual price may no longer hold: this is a bet on the old price coming back, with ${formatInt(row.qty_new_24h ?? 0)} new units arriving per day.`
+      )
+    case "downtrend":
+      return (
+        `Careful. The lowest listing has been falling about ${formatRatio(-(row.trend_pct_day ?? 0))}% a day across the whole ` +
+        `history: a steady trend, not a dip. The usual ${moneyText(row.usual_price)} is the middle of a falling line, ` +
+        `not a level the market keeps returning to. Buying here is a bet on the trend turning.`
       )
     case "refills-fast":
       return (

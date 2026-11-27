@@ -11,6 +11,7 @@ import {
   DEFAULT_ASSUMPTIONS,
   flipPerDay,
   flipProfit,
+  isDowntrend,
   isFalling,
   isSpiked,
   lowBuy,
@@ -42,6 +43,19 @@ describe("Verkaufspreis", () => {
     expect(isFalling(marketRow({ item_id: 1, change_24h_pct: -30 }))).toBe(true)
     expect(isFalling(marketRow({ item_id: 1, change_24h_pct: -29 }))).toBe(false)
     expect(isFalling(marketRow({ item_id: 1 }))).toBe(false)
+  })
+
+  it("nennt es einen Abwaertstrend, wenn der Preis stetig faellt - nicht, wenn er nur schwankt", () => {
+    const trend = (trend_pct_day: number | null, trend_fit: number | null) =>
+      isDowntrend(marketRow({ item_id: 1, trend_pct_day, trend_fit }))
+    expect(trend(-7.7, 0.74)).toBe(true)
+    expect(trend(-3, 0.5)).toBe(true)
+    // Faellt zu langsam, oder die Gerade passt nicht zum Verlauf: ein Einbruch, kein Trend.
+    expect(trend(-2.9, 0.9)).toBe(false)
+    expect(trend(-12, 0.3)).toBe(false)
+    expect(trend(4, 0.9)).toBe(false)
+    expect(trend(null, null)).toBe(false)
+    expect(isDowntrend(undefined)).toBe(false)
   })
 })
 
@@ -229,6 +243,7 @@ describe("Nachschub und Urteil", () => {
     expect(verdict(p, steady, a, levels)).toBe("workable")
     expect(verdict(p, { ...steady, qty_new_24h: 80 }, a, levels)).toBe("refills-fast")
     expect(verdict(p, { ...steady, qty_new_24h: 80, change_24h_pct: -45 }, a, levels)).toBe("falling")
+    expect(verdict(p, { ...steady, qty_new_24h: 80, trend_pct_day: -8, trend_fit: 0.8 }, a, levels)).toBe("downtrend")
     expect(verdict(p, steady, { ...a, gold: 4 }, levels)).toBe("workable")
     expect(verdict(plan(steady, tiers, 0, "reset", { ...a, gold: 4 })!, steady, { ...a, gold: 4 }, levels)).toBe("too-expensive")
     expect(verdict(plan(steady, tiers, 0, "reset", a)!, steady, { ...a, horizon: 0.25 }, levels)).toBe("slow")

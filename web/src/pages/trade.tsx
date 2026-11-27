@@ -1,22 +1,16 @@
 import { useMemo, useState } from "react"
 
-import { Assume, FallBadge, Hint, NameCell, Segmented, Stat, Tag, Toggle, WarnBadge } from "@/components/bits"
+import { Assume, FallBadge, Hint, NameCell, Segmented, Stat, Tag, Toggle, TrendBadge, WarnBadge } from "@/components/bits"
 import { DataTable } from "@/components/data-table"
 import type { DataColumn } from "@/components/data-table"
 import { Count, Dash, Money, Profit, Share } from "@/components/money"
 import { CountNote, Empty, FilterBar, PageHeader, SearchInput } from "@/components/page"
-import { GoldField } from "@/components/gold-field"
+import { GoldField, HorizonField } from "@/components/assumptions"
 import { useApp } from "@/lib/app"
 import { formatDays, formatInt } from "@/lib/format"
 import { matches } from "@/lib/rows"
-import { isFalling, refillsFast } from "@/lib/trade"
+import { isDowntrend, isFalling, refillsFast } from "@/lib/trade"
 import type { Plan } from "@/lib/trade"
-
-const HORIZONS = [
-  [1, "1 day"],
-  [3, "3 days"],
-  [7, "7 days"],
-] as const
 
 const Days = ({ value }: { value: number | null }) => (value == null ? <Dash /> : <>{formatDays(value)}</>)
 
@@ -37,17 +31,21 @@ export function LowPage() {
   const [query, setQuery] = useState("")
   const [fits, setFits] = useState(false)
   const [steady, setSteady] = useState(false)
+  // Ein Abwaertstrend ist kein guenstiger Einkauf. Wer ihn trotzdem sehen will, schaltet ihn ein.
+  const [trendless, setTrendless] = useState(true)
   const gold = app.a.gold * 10_000
+  const plans = trendless ? app.trades.lowSteady : app.trades.low
+  const hidden = app.trades.low.length - app.trades.lowSteady.length
 
   const rows = useMemo(
     () =>
-      app.trades.low.filter(
+      plans.filter(
         (p) =>
           (!fits || p.cost <= gold) &&
           (!steady || !isFalling(app.rows.get(p.itemId))) &&
           matches(query, app.name(p.itemId)),
       ),
-    [app, fits, steady, gold, query],
+    [app, plans, fits, steady, gold, query],
   )
 
   const columns = useMemo<DataColumn<Plan>[]>(
@@ -59,6 +57,7 @@ export function LowPage() {
         value: (p) => app.name(p.itemId),
         cell: (p) => (
           <NameCell name={app.name(p.itemId)}>
+            <TrendBadge row={app.rows.get(p.itemId)} />
             <FallBadge row={app.rows.get(p.itemId)} />
           </NameCell>
         ),
@@ -89,7 +88,8 @@ export function LowPage() {
         Listings well below what the item usually costs. The usual price is the median of the lowest listing over
         the {formatInt(app.meta.snapshots)} snapshots of the last {app.meta.window_days} days. You buy no more than
         your share of sales can move in the time you allow; profit assumes you relist at the usual price, after
-        the 5% cut.
+        the 5% cut. An item that has been falling 3% a day or more, steadily across the whole history, is on a
+        downtrend, not at a low: those are left out unless you switch them on.
       </PageHeader>
       <FilterBar>
         <SearchInput value={query} onChange={setQuery} placeholder="Filter items…" />
@@ -105,12 +105,11 @@ export function LowPage() {
             ]}
           />
         </Assume>
-        <Assume label="Sell within">
-          <Segmented label="Sell within" value={app.a.horizon} onChange={(horizon) => app.setA({ horizon })} options={HORIZONS} />
-        </Assume>
+        <HorizonField />
         <GoldField />
         <Toggle id="low-fits" label="Fits my gold" checked={fits} onChange={setFits} />
-        <Toggle id="low-steady" label="Hide falling prices" checked={steady} onChange={setSteady} />
+        <Toggle id="low-trendless" label="Hide downtrends" checked={trendless} onChange={setTrendless} />
+        <Toggle id="low-steady" label="Hide 24h drops" checked={steady} onChange={setSteady} />
         <CountNote count={rows.length} noun="item" />
       </FilterBar>
       <DataTable
@@ -121,7 +120,10 @@ export function LowPage() {
         minWidth={1080}
         emptyText="Nothing is listed that far below its usual price."
       />
-      <Hint className="mt-2">Double-click a row for the full breakdown.</Hint>
+      <Hint className="mt-2">
+        Double-click a row for the full breakdown.
+        {trendless && hidden > 0 && ` ${formatInt(hidden)} item${hidden === 1 ? "" : "s"} on a steady downtrend ${hidden === 1 ? "is" : "are"} hidden.`}
+      </Hint>
     </>
   )
 }
@@ -138,7 +140,11 @@ export function ResetPage() {
     () =>
       resets.filter((p) => {
         const row = app.rows.get(p.itemId)
-        return (!holds || !refillsFast(row, app.levels)) && (!steady || !isFalling(row)) && matches(query, app.name(p.itemId))
+        return (
+          (!holds || !refillsFast(row, app.levels)) &&
+          (!steady || !(isFalling(row) || isDowntrend(row))) &&
+          matches(query, app.name(p.itemId))
+        )
       }),
     [app, resets, holds, steady, query],
   )
@@ -156,6 +162,7 @@ export function ResetPage() {
             <NameCell name={app.name(p.itemId)}>
               {portfolio.picked.has(p.itemId) && <Tag solid>In plan</Tag>}
               {refillsFast(row, app.levels) && <WarnBadge>Refills fast</WarnBadge>}
+              <TrendBadge row={row} />
               <FallBadge row={row} />
             </NameCell>
           )
@@ -187,7 +194,8 @@ export function ResetPage() {
         Buy every listing up to a gap in the price ladder and relist just under the next one, never more than 10%
         above the usual price. Shown per item is the most profitable reset your gold allows that sells within the
         time you give it and returns at least 20%. “Refills fast” marks the quarter of items where most new units
-        arrive per unit sold; a falling arrow marks a price that fell 30% or more in a day.
+        arrive per unit sold; a falling arrow marks a price that fell 30% or more in a day, “Downtrend” one that
+        has been falling steadily for days.
       </PageHeader>
       <FilterBar>
         <GoldField />
@@ -203,9 +211,7 @@ export function ResetPage() {
             ]}
           />
         </Assume>
-        <Assume label="Sell within">
-          <Segmented label="Sell within" value={app.a.horizon} onChange={(horizon) => app.setA({ horizon })} options={HORIZONS} />
-        </Assume>
+        <HorizonField />
         <Toggle id="reset-holds" label="Hide fast refills" checked={holds} onChange={setHolds} />
         <Toggle id="reset-steady" label="Hide falling prices" checked={steady} onChange={setSteady} />
       </FilterBar>

@@ -373,7 +373,33 @@ def test_usual_price_needs_enough_snapshots(settings: Settings, tmp_path: Path) 
     ]
 
 
+def test_trend_tells_a_steady_decline_from_a_dip(settings: Settings, tmp_path: Path) -> None:
+    # Vier Tage, stuendlich. Item 100 verliert jeden Tag 5 %. Item 300 steht still und
+    # bricht erst in den letzten drei Stunden ein. Item 500 gibt es erst seit zehn Stunden.
+    start = dt.datetime(2026, 11, 14, 0, 0, 0)
+    hours = 96
+    for hour in range(hours):
+        rows = [
+            (100, "commodity", 1, 1, round(100_000 * 0.95 ** (hour / 24)), 100_000),
+            (300, "commodity", 1, 1, 60_000 if hour >= hours - 3 else 100_000, 100_000),
+        ]
+        if hour >= hours - 10:
+            rows.append((500, "commodity", 1, 1, 100_000 - hour * 500, 100_000))
+        write_items(settings, start + dt.timedelta(hours=hour), rows)
+
+    out = tmp_path / "site"
+    publish.build(settings, out_dir=out)
+    falling, dip, new = query(
+        out / publish.MARKET, "SELECT trend_pct_day, trend_fit FROM FILE ORDER BY item_id"
+    )
+    assert falling == (-5.0, 1.0)
+    # Der Einbruch zieht die Gerade nach unten, aber der Verlauf folgt ihr nicht.
+    assert dip[0] < 0 and dip[1] < 0.2
+    assert new == (None, None)
+
+
 def recipe_line(spell_id: int, name: str, item_id: int, count: int, reagents: str) -> str:
+
     return (
         f'{{"spellId":{spell_id},"name":"{name}","category":{{"id":1,"name":"Bars"}},"skill":{{"orange":50}},'
         f'"makes":{{"itemId":{item_id},"name":"{name}","count":{count}}},"reagents":{reagents},'

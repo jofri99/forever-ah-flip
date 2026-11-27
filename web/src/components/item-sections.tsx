@@ -2,14 +2,15 @@ import { useState } from "react"
 import type { ReactNode } from "react"
 import { Maximize2, ShoppingCart } from "lucide-react"
 
-import { CooldownBadge, Hint, Stepper, Tag } from "@/components/bits"
+import { CooldownBadge, Hint, Stepper, Tag, TrendBadge } from "@/components/bits"
 import { Count, Money, Profit } from "@/components/money"
 import { Button } from "@/components/ui/button"
 import { useApp } from "@/lib/app"
-import { formatInt, kindLabel, moneyText } from "@/lib/format"
+import { formatInt, formatRatio, kindLabel, moneyText } from "@/lib/format"
+import { relist } from "@/lib/relist"
 import { canCraft } from "@/lib/rows"
-import { AH_KEEP, bestReset, craftPerDay, craftProfit, flipProfit, isSpiked, lowBuy, sellAt } from "@/lib/trade"
-import type { Craft } from "@/lib/types"
+import { AH_KEEP, bestReset, craftPerDay, craftProfit, flipProfit, isDowntrend, isSpiked, lowBuy, sellAt } from "@/lib/trade"
+import type { Craft, SeriesPoint } from "@/lib/types"
 
 function Section({ title, sub, children }: { title: ReactNode; sub?: ReactNode; children: ReactNode }) {
   return (
@@ -35,6 +36,7 @@ export function ItemTags({ itemId }: { itemId: number }) {
           {row.item_subclass && row.item_subclass !== row.item_class ? ` · ${row.item_subclass}` : ""}
         </Tag>
       )}
+      <TrendBadge row={row} />
       {!row && <Tag>Not on the auction house</Tag>}
     </>
   )
@@ -279,35 +281,56 @@ export function VendorsSection({ itemId, bare }: { itemId: number; bare?: boolea
   return bare ? body : <Section title="Vendors">{body}</Section>
 }
 
-/** In der Seitenleiste: was sich mit dem Item handeln laesst, in drei Zeilen. */
-export function TradeSection({ itemId }: { itemId: number }) {
+/**
+ * In der Seitenleiste: was sich mit dem Item handeln laesst, in ein paar Zeilen.
+ * Mit dem Verlauf steht dabei, wo es am besten wieder eingestellt wird.
+ */
+export function TradeSection({ itemId, series }: { itemId: number; series?: readonly SeriesPoint[] }) {
   const app = useApp()
   const row = app.rows.get(itemId)
   if (!row || row.min_price == null) return null
   const tiers = app.ladder.get(itemId)
   const low = lowBuy(row, tiers, app.a)
   const reset = bestReset(row, tiers, app.a)
+  const where = series?.length ? relist(row, tiers, series, app.a.horizon) : null
   return (
     <Section title="Trade it">
-      {row.usual_price != null ? (
-        <Lines>
+      <Lines>
+        {row.usual_price != null && (
           <Line label="Usual price">
             <Money value={row.usual_price} />{" "}
             <span className="text-muted-foreground">· now {Math.round((row.min_price / row.usual_price) * 100)}%</span>
           </Line>
-          {low && (
-            <Line label={<>Buy low: <Count value={low.units} /> for {moneyText(low.cost)}</>} strong>
-              <Profit value={low.profit} />
-            </Line>
-          )}
-          {reset && (
-            <Line label={<>Reset: buy <Count value={reset.units} /> for {moneyText(reset.cost)}, relist at {moneyText(reset.target)}</>} strong>
-              <Profit value={reset.profit} />
-            </Line>
-          )}
-        </Lines>
-      ) : (
-        <Hint>Not enough history yet for a usual price ({row.usual_points} snapshots).</Hint>
+        )}
+        {low && (
+          <Line label={<>Buy low: <Count value={low.units} /> for {moneyText(low.cost)}</>} strong>
+            <Profit value={low.profit} />
+          </Line>
+        )}
+        {reset && (
+          <Line label={<>Reset: buy <Count value={reset.units} /> for {moneyText(reset.cost)}, relist at {moneyText(reset.target)}</>} strong>
+            <Profit value={reset.profit} />
+          </Line>
+        )}
+        {where && (
+          <Line
+            label={
+              where.best === where.first
+                ? "Relist: sell first, 1c under the lowest"
+                : `Relist: reached ${Math.round((where.best.reached ?? 0) * 100)}% of the time within ${where.horizon} d`
+            }
+          >
+            <Money value={where.best.price} precise />
+          </Line>
+        )}
+      </Lines>
+      {isDowntrend(row) && (
+        <Hint className="mt-1.5 text-down">
+          Falling about {formatRatio(-(row.trend_pct_day ?? 0))}% a day, steadily: a trend, not a dip.
+        </Hint>
+      )}
+      {row.usual_price == null && (
+        <Hint className="mt-1.5">Not enough history yet for a usual price ({row.usual_points} snapshots).</Hint>
       )}
       <Button variant="outline" className="mt-2.5" onClick={() => app.open(itemId)}>
         <Maximize2 aria-hidden />

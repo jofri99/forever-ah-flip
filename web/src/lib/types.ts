@@ -33,6 +33,12 @@ export interface MarketRow {
   usual_price: number | null
   /** Auf wie vielen Staenden der uebliche Preis beruht. */
   usual_points: number
+  /**
+   * Der Trend ueber das ganze Zeitfenster: Aenderung des guenstigsten Angebots in Prozent
+   * je Tag, und wie genau der Verlauf einer Geraden folgt (0 bis 1). Fehlt bei kurzer Geschichte.
+   */
+  trend_pct_day: number | null
+  trend_fit: number | null
   /** Wie viele Stueck in 24 Stunden neu eingestellt wurden. */
   qty_new_24h: number | null
   /** Marktwert des aktuellen Stands nach TSMs Verfahren. Nur mit Preisleiter. */

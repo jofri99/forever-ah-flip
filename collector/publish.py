@@ -54,6 +54,9 @@ LADDER = "ladder.parquet"               # optional: braucht den aktuellen Stand 
 
 # Ab so vielen Staenden gilt der uebliche Preis eines Items als belastbar.
 USUAL_MIN_POINTS = 24
+# Ein Trend braucht mehr Geschichte als ein Median: so viele Staende ueber so viele Tage.
+TREND_MIN_POINTS = 48
+TREND_MIN_DAYS = 3
 # So viele Haendler je Item reichen der Anzeige; wie viele es insgesamt sind, steht daneben.
 VENDORS_PER_ITEM = 3
 
@@ -267,15 +270,25 @@ def _build_market(con: duckdb.DuckDBPyConnection, live_ts: int | None = None) ->
         else "SELECT h.item_id, h.kind, h.ts, h.min_price, h.p25_price, h.median_price, h.n_listings, h.quantity "
              "FROM hourly h, latest WHERE h.ts = latest.ts"
     )
+    trend_known = f"u.usual_points >= {TREND_MIN_POINTS} AND u.trend_days >= {TREND_MIN_DAYS}"
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE market AS
         WITH latest AS (SELECT max(ts) AS ts FROM hourly),
         cur AS ({current}),
         -- Der uebliche Preis: der Median des guenstigsten Angebots ueber alle Staende des Fensters.
+        -- Der Trend: eine Gerade durch den Logarithmus desselben Preises. Ihre Steigung ist die
+        -- Aenderung je Tag; trend_fit (r2) sagt, wie genau der Verlauf der Geraden folgt. Ein
+        -- stetiger Verfall hat beides, ein Ausreisser nach unten nur einen niedrigen Preis.
         usual AS (
-            SELECT item_id, round(median(p)) AS usual_price, count(*)::INTEGER AS usual_points
-            FROM (SELECT item_id, ts, min(min_price) AS p FROM hourly WHERE min_price > 0 GROUP BY item_id, ts)
+            SELECT item_id, round(median(p)) AS usual_price, count(*)::INTEGER AS usual_points,
+                   regr_slope(ln(p), age_days)       AS trend_slope,
+                   regr_r2(ln(p), age_days)          AS trend_fit,
+                   max(age_days) - min(age_days)     AS trend_days
+            FROM (
+                SELECT h.item_id, (h.ts - latest.ts) / 86400.0 AS age_days, min(h.min_price) AS p
+                FROM hourly h, latest WHERE h.min_price > 0 GROUP BY h.item_id, h.ts, latest.ts
+            )
             GROUP BY item_id
         ),
         day AS (
@@ -313,6 +326,11 @@ def _build_market(con: duckdb.DuckDBPyConnection, live_ts: int | None = None) ->
                    AS vendor_buy,
                CASE WHEN u.usual_points >= {USUAL_MIN_POINTS} THEN u.usual_price END::DOUBLE AS usual_price,
                coalesce(u.usual_points, 0)::INTEGER        AS usual_points,
+               -- Aenderung des guenstigsten Angebots in Prozent je Tag, ueber das ganze Fenster.
+               CASE WHEN {trend_known} AND isfinite(u.trend_slope)
+                    THEN round((exp(u.trend_slope) - 1) * 100, 1) END::DOUBLE AS trend_pct_day,
+               CASE WHEN {trend_known} AND isfinite(u.trend_slope) AND isfinite(u.trend_fit)
+                    THEN round(u.trend_fit, 2) END::DOUBLE  AS trend_fit,
                day.qty_new_24h,
                -- Nur mit dem aktuellen Stand von Blizzard: der Marktwert nach TSMs Verfahren.
                mv.market_value

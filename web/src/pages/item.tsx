@@ -3,21 +3,30 @@ import { ArrowLeft, ExternalLink } from "lucide-react"
 import { Hint, StarButton, Stat, Tag } from "@/components/bits"
 import { Heatmap } from "@/components/heatmap"
 import { CraftSection, ItemTags, UsedInSection, VendorsSection } from "@/components/item-sections"
-import { Change, Count, Money } from "@/components/money"
+import { Change, Count, Dash, Money } from "@/components/money"
 import { PageHeader, Panel } from "@/components/page"
 import { LazyChart } from "@/components/lazy-chart"
 import { PriceLadder } from "@/components/price-ladder"
+import { RelistAdvice } from "@/components/relist"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useApp } from "@/lib/app"
-import { formatInt, formatRatio, moneyText } from "@/lib/format"
+import { formatInt, formatPercent, formatRatio, moneyText } from "@/lib/format"
 import type { Page } from "@/lib/route"
 import { useSeries } from "@/lib/series"
-import { churn } from "@/lib/trade"
+import { churn, isDowntrend, TREND_FIT } from "@/lib/trade"
+import type { MarketRow } from "@/lib/types"
+
+/** Was der Trend bedeutet: ohne genug Geschichte nichts, sonst ob der Verlauf ihm wirklich folgt. */
+function trendNote(row: MarketRow): string {
+  if (row.trend_pct_day == null || row.trend_fit == null) return "needs 3 days of history"
+  return row.trend_fit >= TREND_FIT ? "steady across the history" : "no steady direction"
+}
 
 /**
  * Alles ueber ein Item auf einer Seite: Kennzahlen, Verlauf, Heatmap, Preisleiter
- * mit Rechner, Herstellung, Verwendung und Haendler. Wird je Item neu eingehaengt.
+ * mit Rechner, Preis zum Wiedereinstellen, Herstellung, Verwendung und Haendler.
+ * Wird je Item neu eingehaengt.
  */
 export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
   const app = useApp()
@@ -86,6 +95,13 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
           <Stat label="Change 24h" sub={`${moneyText(row.low_24h)} – ${moneyText(row.high_24h)}`}>
             <Change value={row.change_24h_pct} />
           </Stat>
+          <Stat label="Trend" sub={trendNote(row)}>
+            {row.trend_pct_day == null ? (
+              <Dash />
+            ) : (
+              <span className={isDowntrend(row) ? "text-down" : undefined}>{formatPercent(row.trend_pct_day)} a day</span>
+            )}
+          </Stat>
           <Stat label="Sold per day" sub="upper bound: cancels count too">
             <Count value={row.qty_sold_24h} />
           </Stat>
@@ -141,6 +157,11 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
           {row && (
             <Panel title="Price ladder and what a buy-out costs" padded>
               <PriceLadder itemId={itemId} prefer={origin === "low" ? "low" : "reset"} />
+            </Panel>
+          )}
+          {row && (
+            <Panel title="Where to relist" padded>
+              <RelistAdvice itemId={itemId} loaded={loaded} />
             </Panel>
           )}
           {hasVendors && (

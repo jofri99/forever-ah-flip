@@ -169,7 +169,7 @@ function Shell() {
         {nav("opportunities", "Opportunities", LayoutDashboard)}
         {app.crafts.length > 0 && nav("crafting", "Crafting", FlaskConical, profitable)}
         {app.flips.length > 0 && nav("flips", "Vendor flips", Store, app.flips.length)}
-        {hasLadder && nav("low", "Buy low", ArrowDownToLine, app.trades.low.length)}
+        {hasLadder && nav("low", "Buy low", ArrowDownToLine, app.trades.lowSteady.length)}
         {hasLadder && nav("reset", "Market reset", RefreshCw, app.trades.resets.length)}
         {nav("market", "Market", ChartNoAxesColumn)}
         <div className="mx-1.5 my-2 h-px bg-border" />

@@ -2,7 +2,7 @@ import { useMemo } from "react"
 import type { ReactNode } from "react"
 import { User } from "lucide-react"
 
-import { CooldownBadge, CountBadge, FallBadge, SpikeBadge, Tag, Toggle, WarnBadge } from "@/components/bits"
+import { CooldownBadge, CountBadge, FallBadge, SpikeBadge, Tag, Toggle, TrendBadge, WarnBadge } from "@/components/bits"
 import { Money } from "@/components/money"
 import { Empty, LinkButton, PageHeader, Panel } from "@/components/page"
 import { Button } from "@/components/ui/button"
@@ -82,7 +82,7 @@ export function OpportunitiesPage({ onSetProfessions }: { onSetProfessions: () =
     return list.sort((x, y) => y.total - x.total)
   }, [app.rows, app.ladder])
 
-  const low = useMemo(() => [...app.trades.low].sort((x, y) => y.profit - x.profit), [app.trades.low])
+  const low = useMemo(() => [...app.trades.lowSteady].sort((x, y) => y.profit - x.profit), [app.trades.lowSteady])
   const resets = useMemo(() => [...app.trades.resets].sort((x, y) => y.profit - x.profit), [app.trades.resets])
   const hasLadder = app.ladder.size > 0
 
@@ -171,7 +171,7 @@ export function OpportunitiesPage({ onSetProfessions }: { onSetProfessions: () =
             title="Buy low"
             count={low.length}
             action={<LinkButton onClick={() => app.go("low")}>View all →</LinkButton>}
-            sub={`Listed at ${Math.round(app.a.buyAt * 100)}% of the usual price or less. Buy, relist at the usual price.`}
+            sub={`Listed at ${Math.round(app.a.buyAt * 100)}% of the usual price or less, and not on a steady downtrend. Buy, relist at the usual price.`}
           >
             {low.slice(0, TOP).map((p) => {
               const row = app.rows.get(p.itemId)
@@ -212,6 +212,7 @@ export function OpportunitiesPage({ onSetProfessions }: { onSetProfessions: () =
                     <>
                       <Name>{app.name(p.itemId)}</Name>
                       {refillsFast(row, app.levels) && <WarnBadge>Refills fast</WarnBadge>}
+                      <TrendBadge row={row} />
                       <FallBadge row={row} />
                     </>
                   }

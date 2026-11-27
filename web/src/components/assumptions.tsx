@@ -1,6 +1,6 @@
 import { useState } from "react"
 
-import { Assume } from "@/components/bits"
+import { Assume, Segmented } from "@/components/bits"
 import { Input } from "@/components/ui/input"
 import { useApp } from "@/lib/app"
 
@@ -20,6 +20,22 @@ export function GoldField() {
           setA({ gold: Math.max(0, parseInt(event.target.value.replace(/\D/g, ""), 10) || 0) })
         }}
       />
+    </Assume>
+  )
+}
+
+const HORIZONS = [
+  [1, "1 day"],
+  [3, "3 days"],
+  [7, "7 days"],
+] as const
+
+/** In wie vielen Tagen das Gekaufte wieder verkauft sein soll. */
+export function HorizonField() {
+  const { a, setA } = useApp()
+  return (
+    <Assume label="Sell within">
+      <Segmented label="Sell within" value={a.horizon} onChange={(horizon) => setA({ horizon })} options={HORIZONS} />
     </Assume>
   )
 }

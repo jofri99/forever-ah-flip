@@ -1,4 +1,4 @@
-import type { Craft, CraftReagent, MarketRow, VendorFlip } from "./types"
+import type { Craft, CraftReagent, MarketRow, SeriesPoint, VendorFlip } from "./types"
 
 /** Bausteine fuer die Tests: eine vollstaendige Zeile, von der nur das Noetige genannt wird. */
 
@@ -25,10 +25,17 @@ export function marketRow(partial: Partial<MarketRow> & Pick<MarketRow, "item_id
     vendor_buy: null,
     usual_price: null,
     usual_points: 0,
+    trend_pct_day: null,
+    trend_fit: null,
     qty_new_24h: null,
     market_value: null,
     ...partial,
   }
+}
+
+/** Ein Stand des Verlaufs: Zeitpunkt in Sekunden, guenstigster Preis, und was seit dem vorigen Stand verkauft wurde. */
+export function seriesPoint(ts: number, min_price: number | null, qty_sold: number | null = 1): SeriesPoint {
+  return { item_id: 1, kind: "commodity", ts, min_price, median_price: min_price, n_listings: 1, qty_sold }
 }
 
 export function craft(partial: Partial<Craft> & Pick<Craft, "recipe_id" | "item_id">): Craft {
