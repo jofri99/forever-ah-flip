@@ -1,3 +1,4 @@
+import { useMemo } from "react"
 import { ArrowLeft, ExternalLink } from "lucide-react"
 
 import { Hint, StarButton, Stat, Tag } from "@/components/bits"
@@ -9,10 +10,12 @@ import { PageHeader, Panel } from "@/components/page"
 import { LazyChart } from "@/components/lazy-chart"
 import { PriceLadder } from "@/components/price-ladder"
 import { RelistAdvice } from "@/components/relist"
+import { ResetList } from "@/components/resets"
 import { Button } from "@/components/ui/button"
 import { Skeleton } from "@/components/ui/skeleton"
 import { useApp } from "@/lib/app"
 import { formatInt, formatPercent, formatRatio, moneyText } from "@/lib/format"
+import { findResets } from "@/lib/resets"
 import type { Page } from "@/lib/route"
 import { scoreLevel } from "@/lib/score"
 import { useSeries } from "@/lib/series"
@@ -34,6 +37,8 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
   const app = useApp()
   const row = app.rows.get(itemId)
   const loaded = useSeries(row)
+  const resets = useMemo(() => findResets(loaded.series), [loaded.series])
+  const marks = useMemo(() => resets.map((reset) => reset.ts), [resets])
   const known = row != null || app.names[String(itemId)] != null
 
   if (!known) {
@@ -137,12 +142,30 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
               {loaded.status === "error" ? (
                 <p className="text-sm text-destructive">The price history could not be loaded: {loaded.message}</p>
               ) : (
-                <LazyChart series={loaded.series} height={340} usual={row.usual_price} loading={loaded.status === "loading"} />
+                <LazyChart
+                  series={loaded.series}
+                  height={340}
+                  usual={row.usual_price}
+                  loading={loaded.status === "loading"}
+                  marks={marks}
+                />
               )}
               <Hint className="mt-2">
                 Lowest price (solid), median listing (dashed) and below them the quantity sold per snapshot. Times
                 are local.
               </Hint>
+            </Panel>
+          )}
+          {row && loaded.status === "ready" && (
+            <Panel title="Resets seen" padded>
+              <ResetList
+                resets={resets}
+                historyDays={
+                  loaded.series.length
+                    ? (loaded.series[loaded.series.length - 1].ts - loaded.series[0].ts) / 86_400
+                    : 0
+                }
+              />
             </Panel>
           )}
           {row && (
@@ -171,7 +194,11 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
           )}
           {row && (
             <Panel title="Price ladder and what a buy-out costs" padded>
-              <PriceLadder itemId={itemId} prefer={origin === "low" ? "low" : "reset"} />
+              <PriceLadder
+                itemId={itemId}
+                prefer={origin === "low" ? "low" : "reset"}
+                resets={loaded.status === "ready" ? resets : undefined}
+              />
             </Panel>
           )}
           {row && (

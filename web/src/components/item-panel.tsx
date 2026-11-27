@@ -1,3 +1,4 @@
+import { useMemo } from "react"
 import { ExternalLink, Maximize2, X } from "lucide-react"
 
 import { Hint, StarButton, Stat } from "@/components/bits"
@@ -7,6 +8,7 @@ import { LazyChart } from "@/components/lazy-chart"
 import { Button } from "@/components/ui/button"
 import { useApp } from "@/lib/app"
 import { formatInt, moneyText } from "@/lib/format"
+import { findResets } from "@/lib/resets"
 import { useSeries } from "@/lib/series"
 
 /**
@@ -17,6 +19,7 @@ export function ItemPanel({ itemId }: { itemId: number }) {
   const app = useApp()
   const row = app.rows.get(itemId)
   const loaded = useSeries(row)
+  const marks = useMemo(() => findResets(loaded.series).map((reset) => reset.ts), [loaded.series])
 
   return (
     <aside
@@ -54,7 +57,13 @@ export function ItemPanel({ itemId }: { itemId: number }) {
             {loaded.status === "error" ? (
               <p className="text-sm text-destructive">The price history could not be loaded: {loaded.message}</p>
             ) : (
-              <LazyChart series={loaded.series} height={220} usual={row.usual_price} loading={loaded.status === "loading"} />
+              <LazyChart
+                series={loaded.series}
+                height={220}
+                usual={row.usual_price}
+                loading={loaded.status === "loading"}
+                marks={marks}
+              />
             )}
             <Hint>
               {formatInt(row.n_listings)} listing{row.n_listings === 1 ? "" : "s"}, {formatInt(row.quantity)} units ·

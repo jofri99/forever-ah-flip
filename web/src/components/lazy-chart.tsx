@@ -14,13 +14,15 @@ interface LazyChartProps {
   height: number
   usual: number | null
   loading: boolean
+  /** Zeitpunkte erkannter Resets, als Marken im Verlauf. */
+  marks?: readonly number[]
 }
 
-export function LazyChart({ series, height, usual, loading }: LazyChartProps) {
+export function LazyChart({ series, height, usual, loading, marks }: LazyChartProps) {
   return (
     <div className="relative" style={{ height }}>
       <Suspense fallback={<Skeleton className="absolute inset-0" />}>
-        <PriceChart series={series} height={height} usual={usual} />
+        <PriceChart series={series} height={height} usual={usual} marks={marks} />
       </Suspense>
       {loading && <Skeleton className="absolute inset-0" />}
     </div>

@@ -224,7 +224,9 @@ describe("Heatmap", () => {
     min_price,
     median_price: null,
     n_listings: 1,
+    quantity: 1,
     qty_sold,
+    qty_new: null,
   })
 
   it("sortiert den Verlauf in Wochentag und Stunde der Ortszeit", () => {

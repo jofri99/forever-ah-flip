@@ -7,7 +7,9 @@ import { Line, Lines } from "@/components/item-sections"
 import { Count, Money, Profit, Share } from "@/components/money"
 import { useApp } from "@/lib/app"
 import type { AppValue } from "@/lib/app"
-import { formatDays, formatInt, formatRatio, moneyText } from "@/lib/format"
+import { formatDays, formatHours, formatInt, formatRatio, moneyText } from "@/lib/format"
+import { typicalHold } from "@/lib/resets"
+import type { Reset } from "@/lib/resets"
 import { bestReset, churn, lowBuy, plan, verdict } from "@/lib/trade"
 import type { Plan } from "@/lib/trade"
 import type { MarketRow } from "@/lib/types"
@@ -58,9 +60,18 @@ function verdictText(p: Plan, row: MarketRow, app: AppValue): string {
 
 /**
  * Die Preisleiter eines Items und was ein Aufkauf kostet. Der Schieber waehlt, bis
- * zu welcher Stufe gekauft wird; darunter steht die ganze Rechnung.
+ * zu welcher Stufe gekauft wird; darunter steht die ganze Rechnung. Mit `resets`
+ * steht dabei, wie lange fruehere Resets dieses Items gehalten haben.
  */
-export function PriceLadder({ itemId, prefer }: { itemId: number; prefer?: Mode }) {
+export function PriceLadder({
+  itemId,
+  prefer,
+  resets,
+}: {
+  itemId: number
+  prefer?: Mode
+  resets?: readonly Reset[]
+}) {
   const app = useApp()
   const row = app.rows.get(itemId)
   const tiers = app.ladder.get(itemId)
@@ -90,6 +101,7 @@ export function PriceLadder({ itemId, prefer }: { itemId: number; prefer?: Mode 
   const k = Math.min(Math.max(0, chosen ?? defaultK(mode)), maxK)
   const p = plan(row, tiers, k, reset ? "reset" : "usual", app.a)
   const usual = row.usual_price
+  const hold = resets ? typicalHold(resets) : null
   const shown = Math.min(tiers.length, Math.max(12, k + 3))
   const visible = tiers.slice(0, shown)
   const maxQuantity = Math.max(...visible.map((tier) => tier[1]))
@@ -219,6 +231,17 @@ export function PriceLadder({ itemId, prefer }: { itemId: number; prefer?: Mode 
               {p.days == null ? "–" : formatDays(p.days)}
             </Line>
             <Line label="Market lists this many again in">{p.refill == null ? "–" : formatDays(p.refill)}</Line>
+            {reset && resets && (
+              <Line label="Earlier resets of this item held for">
+                {hold == null ? "none seen" : `${formatHours(hold)} · ${resets.length} seen`}
+              </Line>
+            )}
+            {reset && hold != null && p.days != null && p.days * 24 > hold && (
+              <Hint className="col-span-2 text-down">
+                Selling {formatInt(p.units)} units takes {formatDays(p.days)} at current sales, longer than a reset
+                on this item has held so far.
+              </Hint>
+            )}
             <Line label={`New listings per unit sold (typical ${formatRatio(app.levels.typical)})`}>
               {churn(row) == null ? "–" : formatRatio(churn(row) as number)}
             </Line>

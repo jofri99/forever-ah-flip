@@ -6,8 +6,9 @@ import { CooldownBadge, Hint, ScoreMeter, Stepper, Tag, TrendBadge } from "@/com
 import { Count, Money, Profit } from "@/components/money"
 import { Button } from "@/components/ui/button"
 import { useApp } from "@/lib/app"
-import { formatInt, formatRatio, kindLabel, moneyText } from "@/lib/format"
+import { formatHours, formatInt, formatRatio, kindLabel, moneyText } from "@/lib/format"
 import { relist } from "@/lib/relist"
+import { findResets, typicalHold } from "@/lib/resets"
 import { canCraft } from "@/lib/rows"
 import { AH_KEEP, bestReset, craftPerDay, craftProfit, flipProfit, isDowntrend, isSpiked, lowBuy, sellAt } from "@/lib/trade"
 import type { Craft, SeriesPoint } from "@/lib/types"
@@ -293,6 +294,7 @@ export function TradeSection({ itemId, series }: { itemId: number; series?: read
   const low = lowBuy(row, tiers, app.a)
   const reset = bestReset(row, tiers, app.a)
   const where = series?.length ? relist(row, tiers, series, app.a.horizon) : null
+  const resets = series?.length ? findResets(series) : []
   return (
     <Section title="Trade it">
       <Lines>
@@ -324,6 +326,11 @@ export function TradeSection({ itemId, series }: { itemId: number; series?: read
             }
           >
             <Money value={where.best.price} precise />
+          </Line>
+        )}
+        {resets.length > 0 && (
+          <Line label={`Reset${resets.length === 1 ? "" : "s"} seen, held for`}>
+            {resets.length} · {formatHours(typicalHold(resets) ?? 0)}
           </Line>
         )}
       </Lines>

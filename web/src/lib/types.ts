@@ -54,7 +54,12 @@ export interface SeriesPoint {
   min_price: number | null
   median_price: number | null
   n_listings: number
+  /** Wie viele Stueck angeboten waren. */
+  quantity: number
+  /** Seit dem vorigen Stand verschwunden - verkauft oder zurueckgezogen. */
   qty_sold: number | null
+  /** Seit dem vorigen Stand neu eingestellt. */
+  qty_new: number | null
 }
 
 export interface Meta {

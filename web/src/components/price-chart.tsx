@@ -1,13 +1,22 @@
 import { useEffect, useMemo, useRef } from "react"
 import {
   createChart,
+  createSeriesMarkers,
   CrosshairMode,
   HistogramSeries,
   LineSeries,
   LineStyle,
   PriceScaleMode,
 } from "lightweight-charts"
-import type { IChartApi, IPriceLine, ISeriesApi, UTCTimestamp } from "lightweight-charts"
+import type {
+  IChartApi,
+  IPriceLine,
+  ISeriesApi,
+  ISeriesMarkersPluginApi,
+  SeriesMarker,
+  Time,
+  UTCTimestamp,
+} from "lightweight-charts"
 
 import { LOCALE, moneyShort, toLocalChartTime } from "@/lib/format"
 import type { SeriesPoint } from "@/lib/types"
@@ -49,9 +58,24 @@ interface ChartParts {
   min: ISeriesApi<"Line">
   median: ISeriesApi<"Line">
   bars: ISeriesApi<"Histogram">
+  marks: ISeriesMarkersPluginApi<Time>
 }
 
 const chartTime = (ts: number) => toLocalChartTime(ts) as UTCTimestamp
+
+const NO_MARKS: readonly number[] = []
+
+/** Ein Pfeil ueber dem Verlauf an jedem Zeitpunkt, an dem ein Reset erkannt wurde. */
+function resetMarkers(marks: readonly number[]): SeriesMarker<Time>[] {
+  const color = themeColor("--foreground")
+  return marks.map((ts) => ({
+    time: chartTime(ts),
+    position: "aboveBar" as const,
+    shape: "arrowDown" as const,
+    color,
+    text: "reset",
+  }))
+}
 
 /** Ab dieser Spanne zwischen tiefstem und hoechstem Preis wird die Achse logarithmisch. */
 const LOG_FROM = 8
@@ -80,16 +104,19 @@ interface PriceChartProps {
   height?: number
   /** Der uebliche Preis als gestrichelte Linie quer durchs Diagramm. */
   usual?: number | null
+  /** Zeitpunkte erkannter Resets in Unix-Sekunden, aufsteigend. */
+  marks?: readonly number[]
 }
 
 /**
  * Oben guenstigster Preis und Median, darunter Balken: die verkaufte Menge je
  * Stand, oder die Zahl der Angebote, solange es keine Verkaufsdaten gibt.
  */
-export function PriceChart({ series, height = 400, usual = null }: PriceChartProps) {
+export function PriceChart({ series, height = 400, usual = null, marks = NO_MARKS }: PriceChartProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const partsRef = useRef<ChartParts | null>(null)
   const usualRef = useRef<IPriceLine | null>(null)
+  const marksRef = useRef(marks)
   const log = useMemo(() => needsLogScale(series), [series])
 
   useEffect(() => {
@@ -120,7 +147,8 @@ export function PriceChart({ series, height = 400, usual = null }: PriceChartPro
       1,
     )
     chart.panes()[1]?.setHeight(height < 300 ? 60 : 110)
-    partsRef.current = { chart, min, median, bars }
+    const markers = createSeriesMarkers(min, [])
+    partsRef.current = { chart, min, median, bars, marks: markers }
 
     // Wechselt das Theme, zieht das Diagramm die Farben nach.
     const observer = new MutationObserver(() => {
@@ -128,6 +156,7 @@ export function PriceChart({ series, height = 400, usual = null }: PriceChartPro
       min.applyOptions({ color: themeColor("--price") })
       median.applyOptions({ color: themeColor("--muted-foreground") })
       bars.applyOptions({ color: themeColor("--bars") })
+      markers.setMarkers(resetMarkers(marksRef.current))
     })
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ["class"] })
 
@@ -168,6 +197,11 @@ export function PriceChart({ series, height = 400, usual = null }: PriceChartPro
     min.priceScale().applyOptions({ mode: log ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal })
     chart.timeScale().fitContent()
   }, [series, log])
+
+  useEffect(() => {
+    marksRef.current = marks
+    partsRef.current?.marks.setMarkers(resetMarkers(marks))
+  }, [marks])
 
   useEffect(() => {
     const min = partsRef.current?.min

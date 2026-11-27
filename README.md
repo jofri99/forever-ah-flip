@@ -483,6 +483,14 @@ blaettern, Doppelklick oder Enter oeffnet die Vollseite. Dort steht alles:
 - Der Verlauf: guenstigster Preis, Median und darunter die verkaufte Menge je Stand. Liegt
   zwischen tiefstem und hoechstem Preis mehr als das Achtfache, wird die Achse logarithmisch -
   sonst drueckt ein einzelner Ausschlag alles andere an den unteren Rand.
+- *Resets seen*: Stunden, in denen das guenstigste Angebot auf das 1,5-fache oder mehr sprang,
+  waehrend mindestens die Haelfte der angebotenen Stueck verschwand - im Verlauf mit einem
+  Pfeil markiert. Je Reset steht da, von wo nach wo der Preis ging, wie viel verschwand, wie
+  lange der neue Preis hielt (bis er mehr als 20 % darunter fiel), wann er halbiert war und
+  was in der Zeit wegging. Die Haltedauer ist die Zeit, die ein Reset bei diesem Item zum
+  Verkaufen hatte; der Rechner der Preisleiter stellt sie neben die Dauer des eigenen
+  Abverkaufs. Aufgekauft und zurueckgezogen sehen in den Daten gleich aus. Ein einzelnes
+  billiges Angebot, das weggekauft wird, zaehlt nicht: dabei verschwindet kaum Menge.
 - Die Heatmap: Wochentag mal Stunde in Ortszeit, umschaltbar zwischen Preis gegenueber dem
   ueblichen Preis und verkaufter Menge. Sie rechnet aus dem Verlauf des Zeitfensters; mit 14
   Tagen hat jede Stunde zwei Stichproben, mit `publish --days 28` vier.
@@ -520,6 +528,7 @@ web/src/
   lib/trade.ts       die Rechnung: Rezepte, Flips, Low Buy, Reset, Nachschub, Trend, Urteil
   lib/score.ts       der Kauf-Score und seine Teile
   lib/relist.ts      der Preis zum Wiedereinstellen: Rueckblick ueber den Verlauf
+  lib/resets.ts      Resets im Verlauf erkennen und messen, wie lange sie hielten
   lib/app.tsx        geladene Daten, Annahmen, Berufe, Merk- und Einkaufsliste als ein Kontext
   lib/route.ts       Seite und Item in der Adresse
   lib/data.ts        liest die Parquet-Dateien, hourly.parquet gezielt je Item
@@ -530,7 +539,7 @@ web/src/
   components/        Tabelle, Seitenleiste, Heatmap, Preisleiter, Einstellpreis, Diagramm; ui/ kommt von shadcn
 ```
 
-Die Rechnung steht in `lib/trade.ts`, `lib/score.ts` und `lib/relist.ts` als reine Funktionen
+Die Rechnung steht in `lib/trade.ts`, `lib/score.ts`, `lib/relist.ts` und `lib/resets.ts` als reine Funktionen
 und ist getestet; die Oberflaeche zeigt nur an, was dort herauskommt. Das Diagramm zeichnet
 TradingViews `lightweight-charts`,
 die Parquet-Dateien liest `hyparquet`. Die Diagramm-Bibliothek wird erst geladen, wenn

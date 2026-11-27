@@ -34,8 +34,24 @@ export function marketRow(partial: Partial<MarketRow> & Pick<MarketRow, "item_id
 }
 
 /** Ein Stand des Verlaufs: Zeitpunkt in Sekunden, guenstigster Preis, und was seit dem vorigen Stand verkauft wurde. */
-export function seriesPoint(ts: number, min_price: number | null, qty_sold: number | null = 1): SeriesPoint {
-  return { item_id: 1, kind: "commodity", ts, min_price, median_price: min_price, n_listings: 1, qty_sold }
+export function seriesPoint(
+  ts: number,
+  min_price: number | null,
+  qty_sold: number | null = 1,
+  rest: Partial<SeriesPoint> = {},
+): SeriesPoint {
+  return {
+    item_id: 1,
+    kind: "commodity",
+    ts,
+    min_price,
+    median_price: min_price,
+    n_listings: 1,
+    quantity: 100,
+    qty_sold,
+    qty_new: null,
+    ...rest,
+  }
 }
 
 export function craft(partial: Partial<Craft> & Pick<Craft, "recipe_id" | "item_id">): Craft {

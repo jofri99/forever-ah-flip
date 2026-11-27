@@ -29,7 +29,9 @@ const SERIES_COLUMNS = [
   "min_price",
   "median_price",
   "n_listings",
+  "quantity",
   "qty_sold",
+  "qty_new",
 ]
 
 /** Eine Zeilengruppe von hourly.parquet: welche Zeilen, welche Item-IDs. */

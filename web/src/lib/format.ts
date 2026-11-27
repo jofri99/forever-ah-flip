@@ -53,6 +53,11 @@ export function formatDuration(seconds: number): string {
   return `${Math.round(seconds)}s`
 }
 
+/** Stunden als kurze Dauer: "< 1h", "5h", "3d". */
+export function formatHours(hours: number): string {
+  return hours < 1 ? "< 1h" : formatDuration(hours * 3_600)
+}
+
 /** Tage mit einer Nachkommastelle; alles unter einem Zehntel ist "< 0.1 d". */
 export function formatDays(days: number): string {
   return days < 0.1 ? "< 0.1 d" : `${days.toLocaleString(LOCALE, { maximumFractionDigits: 1 })} d`
