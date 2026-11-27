@@ -30,7 +30,7 @@ from typing import Any
 import duckdb
 
 from . import crafting, foreverdb_dump, names, schema, store
-from .config import Settings
+from .config import AH_KEEP, UNREACHABLE_SIDE, Settings
 
 DB_NAME = "forever.duckdb"
 
@@ -297,7 +297,7 @@ QUALIFY row_number() OVER (
 # Zum Herstellen taugt ein Haendler, den die Horde erreicht und der unbegrenzt liefert.
 CRAFT_VENDORS = (
     "SELECT * FROM vendor_items "
-    "WHERE side <> 'Alliance' AND price_per_item > 0 AND NOT coalesce(limited, false)"
+    f"WHERE side <> '{UNREACHABLE_SIDE}' AND price_per_item > 0 AND NOT coalesce(limited, false)"
 )
 
 
@@ -324,7 +324,7 @@ JOIN vendors v USING (vendor_id);
 """
 
 # --- Sichten: alles, was am stuendlichen Stand haengt -------------------------------
-VIEWS = """
+VIEWS = f"""
 -- Der juengste Stand, mit Namen und Haendlerpreisen.
 CREATE OR REPLACE VIEW latest AS
 SELECT s.snapshot_ts, s.house, s.item_id, i.name, i.quality, s.kind,
@@ -359,11 +359,11 @@ GROUP BY ALL;
 
 -- Beim Haendler kaufen, im Auktionshaus verkaufen: je Item der guenstigste Haendler,
 -- den die Horde erreicht, gegen das guenstigste Angebot im Auktionshaus.
--- `profit` rechnet die 5 % Gebuehr des Auktionshauses schon ab.
+-- `profit` rechnet die Gebuehr des Auktionshauses schon ab.
 CREATE OR REPLACE VIEW vendor_flips AS
 WITH cheapest AS (
     SELECT * FROM vendor_items
-    WHERE side <> 'Alliance' AND price_per_item > 0
+    WHERE side <> '{UNREACHABLE_SIDE}' AND price_per_item > 0
     QUALIFY row_number() OVER (PARTITION BY item_id ORDER BY price_per_item, vendor_id) = 1
 ),
 sold AS (
@@ -373,8 +373,8 @@ sold AS (
 SELECT l.item_id, l.name, i.item_class, i.item_subclass,
        c.price_per_item                                  AS vendor_price,
        l.min_price                                       AS ah_price,
-       round(l.min_price * 0.95 - c.price_per_item)::BIGINT AS profit,
-       round((l.min_price * 0.95 - c.price_per_item) * 100.0 / c.price_per_item)::INTEGER
+       round(l.min_price * {AH_KEEP} - c.price_per_item)::BIGINT AS profit,
+       round((l.min_price * {AH_KEEP} - c.price_per_item) * 100.0 / c.price_per_item)::INTEGER
                                                          AS profit_pct,
        l.n_listings,
        s.qty_sold                                        AS sold_recently,
@@ -385,7 +385,7 @@ FROM latest l
 JOIN cheapest c USING (item_id)
 JOIN items i USING (item_id)
 LEFT JOIN sold s USING (item_id)
-WHERE l.min_price * 0.95 > c.price_per_item;
+WHERE l.min_price * {AH_KEEP} > c.price_per_item;
 
 -- Je Item das guenstigste Angebot im Auktionshaus, mit den Verkaeufen der letzten
 -- 24 Stunden vor dem juengsten Stand.

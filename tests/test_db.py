@@ -15,13 +15,6 @@ T0 = dt.datetime(2026, 11, 17, 9, 18, 54)
 T1 = dt.datetime(2026, 11, 17, 10, 18, 56)
 
 
-@pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings.from_env(
-        {"BLIZZARD_CLIENT_ID": "x", "BLIZZARD_CLIENT_SECRET": "x", "AH_DATA_DIR": str(tmp_path / "data")}
-    )
-
-
 def write(settings: Settings, sql: str, path: Path) -> None:
     con = store.connect()
     try:

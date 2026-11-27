@@ -1,67 +1,13 @@
-import { useEffect, useState } from "react"
 import { ExternalLink, Maximize2, X } from "lucide-react"
 
-import { Hint, StarButton, Stat, Tag } from "@/components/bits"
-import { CraftSection, TradeSection, UsedInSection, VendorsSection } from "@/components/item-sections"
+import { Hint, StarButton, Stat } from "@/components/bits"
+import { CraftSection, ItemTags, TradeSection, UsedInSection, VendorsSection } from "@/components/item-sections"
 import { Change, Count, Money } from "@/components/money"
 import { LazyChart } from "@/components/lazy-chart"
 import { Button } from "@/components/ui/button"
 import { useApp } from "@/lib/app"
-import { loadSeries } from "@/lib/data"
-import { formatInt, kindLabel, moneyText } from "@/lib/format"
-import type { MarketRow, SeriesPoint } from "@/lib/types"
-
-export type SeriesState =
-  | { status: "loading"; series: SeriesPoint[] }
-  | { status: "ready"; series: SeriesPoint[] }
-  | { status: "error"; series: SeriesPoint[]; message: string }
-
-/**
- * Der Verlauf eines Items. Wer ihn benutzt, wird je Item neu eingehaengt (key) -
- * darum beginnt der Zustand immer bei "loading".
- */
-export function useSeries(row: MarketRow | undefined): SeriesState {
-  const { meta } = useApp()
-  const [state, setState] = useState<SeriesState>({ status: "loading", series: [] })
-  const itemId = row?.item_id
-  const kind = row?.kind
-
-  useEffect(() => {
-    if (itemId == null || kind == null) return
-    let cancelled = false
-    loadSeries(meta, itemId, kind)
-      .then((series) => {
-        if (!cancelled) setState({ status: "ready", series })
-      })
-      .catch((error: unknown) => {
-        if (!cancelled) {
-          setState({ status: "error", series: [], message: error instanceof Error ? error.message : String(error) })
-        }
-      })
-    // Wird inzwischen ein anderes Item gewaehlt, darf die alte Antwort nichts mehr setzen.
-    return () => {
-      cancelled = true
-    }
-  }, [meta, itemId, kind])
-
-  return state
-}
-
-export function ItemTags({ itemId }: { itemId: number }) {
-  const row = useApp().rows.get(itemId)
-  return (
-    <>
-      {row && <Tag>{kindLabel(row.kind)}</Tag>}
-      {row?.item_class && (
-        <Tag solid>
-          {row.item_class}
-          {row.item_subclass && row.item_subclass !== row.item_class ? ` · ${row.item_subclass}` : ""}
-        </Tag>
-      )}
-      {!row && <Tag>Not on the auction house</Tag>}
-    </>
-  )
-}
+import { formatInt, moneyText } from "@/lib/format"
+import { useSeries } from "@/lib/series"
 
 /**
  * Die Seitenleiste: das gewaehlte Item bleibt offen, waehrend man durch die Liste

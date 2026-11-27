@@ -2,8 +2,7 @@ import { ArrowLeft, ExternalLink } from "lucide-react"
 
 import { Hint, StarButton, Stat, Tag } from "@/components/bits"
 import { Heatmap } from "@/components/heatmap"
-import { ItemTags, useSeries } from "@/components/item-panel"
-import { CraftSection, UsedInSection, VendorsSection } from "@/components/item-sections"
+import { CraftSection, ItemTags, UsedInSection, VendorsSection } from "@/components/item-sections"
 import { Change, Count, Money } from "@/components/money"
 import { PageHeader, Panel } from "@/components/page"
 import { LazyChart } from "@/components/lazy-chart"
@@ -13,6 +12,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useApp } from "@/lib/app"
 import { formatInt, formatRatio, moneyText } from "@/lib/format"
 import type { Page } from "@/lib/route"
+import { useSeries } from "@/lib/series"
 import { churn } from "@/lib/trade"
 
 /**

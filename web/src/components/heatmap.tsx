@@ -1,6 +1,6 @@
 import { Fragment, useMemo, useState } from "react"
 
-import { Hint, Segmented } from "@/components/bits"
+import { Hint, Segmented, Swatch } from "@/components/bits"
 import { formatDateTime, formatInt, moneyText } from "@/lib/format"
 import { heatCells, median, priceLevel, soldLevel, WEEKDAYS } from "@/lib/heat"
 import type { SeriesPoint } from "@/lib/types"
@@ -17,15 +17,6 @@ const PRICE_COLOR: Record<string, string> = {
 }
 const SOLD_COLOR = ["", "var(--viz-1)", "var(--viz-2)", "var(--viz-3)", "var(--viz-4)", "var(--viz-5)"]
 const EMPTY = "shadow-[inset_0_0_0_1px_var(--border)]"
-
-function Swatch({ color }: { color?: string }) {
-  return (
-    <i
-      className={`mr-1 inline-block h-2.5 w-3.5 rounded-xs align-[-1px] ${color ? "" : EMPTY}`}
-      style={color ? { background: color } : undefined}
-    />
-  )
-}
 
 interface HeatmapProps {
   series: SeriesPoint[]

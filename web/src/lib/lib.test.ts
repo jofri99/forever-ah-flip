@@ -2,7 +2,7 @@ import type { FileMetaData } from "hyparquet"
 import { describe, expect, it } from "vitest"
 
 import { buildGroupIndex, spansFor } from "./data"
-import { craft, marketRow, reagent } from "./fixtures"
+import { craft, marketRow, reagent } from "./test-fixtures"
 import {
   formatDays,
   formatDuration,

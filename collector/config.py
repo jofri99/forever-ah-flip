@@ -12,6 +12,13 @@ DEFAULT_ENV_FILE = ROOT / ".env"
 # Die API nennt sich bei automatisierten Zugriffen beim Projektnamen, nicht beim Nutzer.
 USER_AGENT = "forever-ah-flip/0.1"
 
+# Regeln des Spiels, mit denen mehrere Module rechnen.
+AH_CUT = 0.05                    # was das Auktionshaus vom Verkaufspreis behaelt
+AH_KEEP = 1 - AH_CUT             # was dem Verkaeufer bleibt
+# Gesammelt wird das Auktionshaus der Horde. Haendler dieser Fraktion sind von dort
+# aus nicht erreichbar.
+UNREACHABLE_SIDE = "Alliance"
+
 REGIONS = ("eu", "us", "kr", "tw")
 
 

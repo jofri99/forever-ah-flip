@@ -84,10 +84,36 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _after_dump(config, code: int) -> int:
-    """Nach einem Abzug die Tabellen der lokalen Datenbank nachziehen, wenn es sie gibt."""
+def _foreverdb(config, args: argparse.Namespace) -> int:
+    """Die Abzuege von ForeverDB. Danach zieht die lokale Datenbank ihre Tabellen nach, wenn es sie gibt."""
     from . import db as db_module
+    from . import foreverdb_dump
+    from .foreverdb import ForeverDBError
 
+    commands = {
+        "foreverdb": lambda: foreverdb_dump.main(
+            config, args.lists, max_requests=args.max_requests, restart=args.restart
+        ),
+        "foreverdb-details": lambda: foreverdb_dump.details_main(
+            config, scope=args.scope, max_requests=args.max_requests
+        ),
+        "foreverdb-vendors": lambda: foreverdb_dump.vendors_main(config, max_requests=args.max_requests),
+        "foreverdb-recipes": lambda: foreverdb_dump.recipes_main(config, max_requests=args.max_requests),
+        "foreverdb-refresh": lambda: foreverdb_dump.refresh_main(config, max_requests=args.max_requests),
+    }
+    if args.command == "foreverdb":
+        unknown = [name for name in args.lists if name not in foreverdb_dump.LISTS]
+        if unknown:
+            print(
+                f"Unbekannte Liste: {', '.join(unknown)}. Moeglich: {', '.join(foreverdb_dump.LISTS)}",
+                file=sys.stderr,
+            )
+            return 2
+    try:
+        code = commands[args.command]()
+    except (ForeverDBError, RuntimeError) as exc:
+        print(exc, file=sys.stderr)
+        return 2
     note = db_module.refresh(config)
     if note:
         print(note)
@@ -115,63 +141,8 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     # ForeverDB hat einen eigenen Schluessel und braucht die von Blizzard nicht.
-    if args.command == "foreverdb":
-        from . import foreverdb_dump
-        from .foreverdb import ForeverDBError
-
-        unknown = [name for name in args.lists if name not in foreverdb_dump.LISTS]
-        if unknown:
-            print(f"Unbekannte Liste: {', '.join(unknown)}. Moeglich: {', '.join(foreverdb_dump.LISTS)}", file=sys.stderr)
-            return 2
-        try:
-            return _after_dump(config, foreverdb_dump.main(
-                config, args.lists, max_requests=args.max_requests, restart=args.restart
-            ))
-        except ForeverDBError as exc:
-            print(exc, file=sys.stderr)
-            return 2
-
-    if args.command == "foreverdb-refresh":
-        from . import foreverdb_dump
-        from .foreverdb import ForeverDBError
-
-        try:
-            return _after_dump(config, foreverdb_dump.refresh_main(config, max_requests=args.max_requests))
-        except (ForeverDBError, RuntimeError) as exc:
-            print(exc, file=sys.stderr)
-            return 2
-
-    if args.command == "foreverdb-recipes":
-        from . import foreverdb_dump
-        from .foreverdb import ForeverDBError
-
-        try:
-            return _after_dump(config, foreverdb_dump.recipes_main(config, max_requests=args.max_requests))
-        except (ForeverDBError, RuntimeError) as exc:
-            print(exc, file=sys.stderr)
-            return 2
-
-    if args.command == "foreverdb-vendors":
-        from . import foreverdb_dump
-        from .foreverdb import ForeverDBError
-
-        try:
-            return _after_dump(config, foreverdb_dump.vendors_main(config, max_requests=args.max_requests))
-        except (ForeverDBError, RuntimeError) as exc:
-            print(exc, file=sys.stderr)
-            return 2
-
-    if args.command == "foreverdb-details":
-        from . import foreverdb_dump
-        from .foreverdb import ForeverDBError
-
-        try:
-            return _after_dump(
-                config, foreverdb_dump.details_main(config, scope=args.scope, max_requests=args.max_requests)
-            )
-        except (ForeverDBError, RuntimeError) as exc:
-            print(exc, file=sys.stderr)
-            return 2
+    if args.command.startswith("foreverdb"):
+        return _foreverdb(config, args)
 
     # Die Datenbank liest nur vorhandene Dateien und braucht keine Zugangsdaten.
     if args.command == "db":

@@ -27,7 +27,7 @@ from typing import Any
 import duckdb
 
 from . import store
-from .config import Settings
+from .config import UNREACHABLE_SIDE, Settings
 from .foreverdb import ForeverDBClient, ForeverDBQuotaError
 
 log = logging.getLogger(__name__)
@@ -308,7 +308,7 @@ def vendor_ids(directory: Path) -> list[int]:
         rows = con.execute(
             f"SELECT id FROM read_json('{store.sql_path(listed)}', format = 'newline_delimited', "
             "columns = {'id': 'INTEGER', 'side': 'VARCHAR'}) "
-            "ORDER BY (side = 'Alliance'), id"
+            f"ORDER BY (side = '{UNREACHABLE_SIDE}'), id"
         ).fetchall()
         return [row[0] for row in rows]
     finally:
@@ -335,96 +335,6 @@ def vendors_main(settings: Settings, max_requests: int | None = None) -> int:
     if result["stopped"]:
         print(f"  unterbrochen: {result['stopped']} - der naechste Lauf macht dort weiter")
     print(f"  nach {result['file']}")
-    return 0
-
-
-REFRESH_DIR = "refresh"
-# Die Listen, die beim Auffrischen neu geholt werden. Die Spell-Liste gehoert dazu,
-# weil an ihr die Abklingzeiten der Rezepte haengen.
-REFRESH_LISTS = ("items", "vendors", "spells")
-# Was am Ende in einem Zug ausgetauscht wird.
-REFRESH_FILES = (*(f"{name}.jsonl" for name in REFRESH_LISTS), VENDOR_DETAILS_FILE)
-
-
-def refresh(
-    client: ForeverDBClient, directory: Path, max_requests: int | None = None
-) -> dict[str, Any]:
-    """Zieht Item-Liste, Haendler, Spell-Liste und Sortimente neu ab, ohne die alten anzutasten.
-
-    Geholt wird in einen eigenen Ordner. Erst wenn alles vollstaendig da ist,
-    ersetzen die neuen Dateien die alten. Bis dahin - auch nach einem Abbruch -
-    arbeiten Datenbank und Oberflaeche mit dem bisherigen, vollstaendigen Stand.
-    Ein erneuter Aufruf setzt im Ordner dort fort, wo der letzte aufgehoert hat.
-    """
-    staging = directory / REFRESH_DIR
-    budget = max_requests
-    used = 0
-    steps: list[dict[str, Any]] = []
-
-    def remaining() -> int | None:
-        return None if budget is None else max(budget - used, 0)
-
-    for name in REFRESH_LISTS:
-        result = dump_list(client, name, staging, max_requests=remaining())
-        used += result["requests"]
-        steps.append({"step": name, "rows": result["rows"], "total": result["total"], "done": result["done"]})
-        if not result["done"]:
-            return {"complete": False, "steps": steps, "requests": used, "stopped": result["stopped"]}
-
-    details = dump_item_details(
-        client, vendor_ids(staging), staging, max_requests=remaining(), kind="vendors"
-    )
-    used += details["requests"]
-    steps.append({
-        "step": "vendor_details",
-        "rows": details["already"] + details["fetched"],
-        "total": details["wanted"],
-        "done": details["stopped"] is None and details["left"] == 0,
-    })
-    if details["stopped"] is not None or details["left"]:
-        return {"complete": False, "steps": steps, "requests": used, "stopped": details["stopped"]}
-
-    # Alles da: austauschen. Der Stand der Listen wandert mit, die Fehlanzeigen der
-    # Haendler gelten fuer den neuen Abzug neu.
-    fresh_state = _load_state(staging)
-    state = _load_state(directory)
-    for file_name in REFRESH_FILES:
-        os.replace(staging / file_name, directory / file_name)
-    for key in (*REFRESH_LISTS, DETAIL_KINDS["vendors"][2]):
-        if key in fresh_state:
-            state[key] = fresh_state[key]
-        else:
-            state.pop(key, None)
-    _save_state(directory, state)
-    (staging / "state.json").unlink(missing_ok=True)
-    try:
-        staging.rmdir()
-    except OSError:
-        pass
-    return {"complete": True, "steps": steps, "requests": used, "stopped": None}
-
-
-def refresh_main(settings: Settings, max_requests: int | None = None) -> int:
-    directory = dump_dir(settings)
-    with ForeverDBClient(settings.foreverdb_key) as client:
-        result = refresh(client, directory, max_requests=max_requests)
-        recipes = None
-        if result["complete"]:
-            # Ein neuer Spielstand aendert auch Rezepte. Die kosten nur gut 30 Anfragen.
-            left = None if max_requests is None else max(max_requests - result["requests"], 0)
-            recipes = dump_recipes(client, directory, max_requests=left)
-    for step in result["steps"]:
-        status = "fertig" if step["done"] else "offen"
-        print(f"  {step['step']:<15} {step['rows']:>6} von {step['total']} - {status}")
-    if result["complete"]:
-        print(f"Ausgetauscht nach {result['requests']} Anfragen: {', '.join(REFRESH_FILES)}")
-    else:
-        print(
-            f"Noch nicht vollstaendig ({result['stopped']}). Die bisherigen Dateien gelten weiter; "
-            "ein erneuter Aufruf setzt fort."
-        )
-    if recipes is not None:
-        _print_recipes(recipes)
     return 0
 
 
@@ -530,6 +440,96 @@ def recipes_main(settings: Settings, max_requests: int | None = None) -> int:
     with ForeverDBClient(settings.foreverdb_key) as client:
         result = dump_recipes(client, dump_dir(settings), max_requests=max_requests)
     _print_recipes(result)
+    return 0
+
+
+REFRESH_DIR = "refresh"
+# Die Listen, die beim Auffrischen neu geholt werden. Die Spell-Liste gehoert dazu,
+# weil an ihr die Abklingzeiten der Rezepte haengen.
+REFRESH_LISTS = ("items", "vendors", "spells")
+# Was am Ende in einem Zug ausgetauscht wird.
+REFRESH_FILES = (*(f"{name}.jsonl" for name in REFRESH_LISTS), VENDOR_DETAILS_FILE)
+
+
+def refresh(
+    client: ForeverDBClient, directory: Path, max_requests: int | None = None
+) -> dict[str, Any]:
+    """Zieht Item-Liste, Haendler, Spell-Liste und Sortimente neu ab, ohne die alten anzutasten.
+
+    Geholt wird in einen eigenen Ordner. Erst wenn alles vollstaendig da ist,
+    ersetzen die neuen Dateien die alten. Bis dahin - auch nach einem Abbruch -
+    arbeiten Datenbank und Oberflaeche mit dem bisherigen, vollstaendigen Stand.
+    Ein erneuter Aufruf setzt im Ordner dort fort, wo der letzte aufgehoert hat.
+    """
+    staging = directory / REFRESH_DIR
+    budget = max_requests
+    used = 0
+    steps: list[dict[str, Any]] = []
+
+    def remaining() -> int | None:
+        return None if budget is None else max(budget - used, 0)
+
+    for name in REFRESH_LISTS:
+        result = dump_list(client, name, staging, max_requests=remaining())
+        used += result["requests"]
+        steps.append({"step": name, "rows": result["rows"], "total": result["total"], "done": result["done"]})
+        if not result["done"]:
+            return {"complete": False, "steps": steps, "requests": used, "stopped": result["stopped"]}
+
+    details = dump_item_details(
+        client, vendor_ids(staging), staging, max_requests=remaining(), kind="vendors"
+    )
+    used += details["requests"]
+    steps.append({
+        "step": "vendor_details",
+        "rows": details["already"] + details["fetched"],
+        "total": details["wanted"],
+        "done": details["stopped"] is None and details["left"] == 0,
+    })
+    if details["stopped"] is not None or details["left"]:
+        return {"complete": False, "steps": steps, "requests": used, "stopped": details["stopped"]}
+
+    # Alles da: austauschen. Der Stand der Listen wandert mit, die Fehlanzeigen der
+    # Haendler gelten fuer den neuen Abzug neu.
+    fresh_state = _load_state(staging)
+    state = _load_state(directory)
+    for file_name in REFRESH_FILES:
+        os.replace(staging / file_name, directory / file_name)
+    for key in (*REFRESH_LISTS, DETAIL_KINDS["vendors"][2]):
+        if key in fresh_state:
+            state[key] = fresh_state[key]
+        else:
+            state.pop(key, None)
+    _save_state(directory, state)
+    (staging / "state.json").unlink(missing_ok=True)
+    try:
+        staging.rmdir()
+    except OSError:
+        pass
+    return {"complete": True, "steps": steps, "requests": used, "stopped": None}
+
+
+def refresh_main(settings: Settings, max_requests: int | None = None) -> int:
+    directory = dump_dir(settings)
+    with ForeverDBClient(settings.foreverdb_key) as client:
+        result = refresh(client, directory, max_requests=max_requests)
+        recipes = None
+        if result["complete"]:
+            # Ein neuer Spielstand aendert auch Rezepte. Die kosten nur gut 30 Anfragen.
+            left = None if max_requests is None else max(max_requests - result["requests"], 0)
+            recipes = dump_recipes(client, directory, max_requests=left)
+    for step in result["steps"]:
+        status = "fertig" if step["done"] else "offen"
+        print(f"  {step['step']:<15} {step['rows']:>6} von {step['total']} - {status}")
+    if result["complete"]:
+        print(f"Ausgetauscht nach {result['requests']} Anfragen: {', '.join(REFRESH_FILES)}")
+    else:
+        print(
+            f"Noch nicht vollstaendig ({result['stopped']}). Die bisherigen Dateien gelten weiter; "
+            "ein erneuter Aufruf setzt fort."
+        )
+    if recipes is not None:
+        _print_recipes(recipes)
     return 0
 
 

@@ -1,36 +1,16 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
 
-import { Assume, Hint, Segmented } from "@/components/bits"
+import { Hint, Segmented, Swatch } from "@/components/bits"
+import { GoldField } from "@/components/gold-field"
 import { Line, Lines } from "@/components/item-sections"
 import { Count, Money, Profit, Share } from "@/components/money"
-import { Input } from "@/components/ui/input"
 import { useApp } from "@/lib/app"
 import type { AppValue } from "@/lib/app"
 import { formatDays, formatInt, formatRatio, moneyText } from "@/lib/format"
 import { bestReset, churn, lowBuy, plan, verdict } from "@/lib/trade"
 import type { Plan } from "@/lib/trade"
 import type { MarketRow } from "@/lib/types"
-
-/** Das verfuegbare Gold. Der Text bleibt, wie er getippt wurde; gerechnet wird mit der Zahl darin. */
-export function GoldField() {
-  const { a, setA } = useApp()
-  const [text, setText] = useState(String(a.gold))
-  return (
-    <Assume label="My gold" after="g">
-      <Input
-        value={text}
-        inputMode="numeric"
-        aria-label="My gold"
-        className="h-8 w-24 text-right"
-        onChange={(event) => {
-          setText(event.target.value)
-          setA({ gold: Math.max(0, parseInt(event.target.value.replace(/\D/g, ""), 10) || 0) })
-        }}
-      />
-    </Assume>
-  )
-}
 
 type Mode = "reset" | "low"
 
@@ -199,8 +179,8 @@ export function PriceLadder({ itemId, prefer }: { itemId: number; prefer?: Mode 
       </table>
       {tiers.length > shown && <Hint>and {formatInt(tiers.length - shown)} more price steps above</Hint>}
       <div className="flex flex-wrap gap-x-4 text-[11px] text-muted-foreground">
-        <span><i className="mr-1 inline-block h-2.5 w-3.5 rounded-xs align-[-1px]" style={{ background: "var(--viz)" }} />you buy</span>
-        <span><i className="mr-1 inline-block h-2.5 w-3.5 rounded-xs bg-border align-[-1px]" />stays listed</span>
+        <span><Swatch color="var(--viz)" />you buy</span>
+        <span><Swatch color="var(--border)" />stays listed</span>
       </div>
 
       {!p ? (

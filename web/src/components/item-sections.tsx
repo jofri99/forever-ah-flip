@@ -1,17 +1,17 @@
 import { useState } from "react"
 import type { ReactNode } from "react"
-import { Maximize2, Minus, Plus, ShoppingCart } from "lucide-react"
+import { Maximize2, ShoppingCart } from "lucide-react"
 
-import { CooldownBadge, Hint, Tag } from "@/components/bits"
+import { CooldownBadge, Hint, Stepper, Tag } from "@/components/bits"
 import { Count, Money, Profit } from "@/components/money"
 import { Button } from "@/components/ui/button"
 import { useApp } from "@/lib/app"
-import { formatInt, moneyText } from "@/lib/format"
+import { formatInt, kindLabel, moneyText } from "@/lib/format"
 import { canCraft } from "@/lib/rows"
 import { AH_KEEP, bestReset, craftPerDay, craftProfit, flipProfit, isSpiked, lowBuy, sellAt } from "@/lib/trade"
 import type { Craft } from "@/lib/types"
 
-export function Section({ title, sub, children }: { title: ReactNode; sub?: ReactNode; children: ReactNode }) {
+function Section({ title, sub, children }: { title: ReactNode; sub?: ReactNode; children: ReactNode }) {
   return (
     <section>
       <h3 className="mb-1.5 flex flex-wrap items-center gap-1.5 text-xs font-semibold">
@@ -20,6 +20,23 @@ export function Section({ title, sub, children }: { title: ReactNode; sub?: Reac
       </h3>
       {children}
     </section>
+  )
+}
+
+/** Was fuer ein Item das ist: Art und Typ - oder dass es gerade nicht im Auktionshaus steht. */
+export function ItemTags({ itemId }: { itemId: number }) {
+  const row = useApp().rows.get(itemId)
+  return (
+    <>
+      {row && <Tag>{kindLabel(row.kind)}</Tag>}
+      {row?.item_class && (
+        <Tag solid>
+          {row.item_class}
+          {row.item_subclass && row.item_subclass !== row.item_class ? ` · ${row.item_subclass}` : ""}
+        </Tag>
+      )}
+      {!row && <Tag>Not on the auction house</Tag>}
+    </>
   )
 }
 
@@ -38,7 +55,7 @@ export function Line({ label, children, strong }: { label: ReactNode; children: 
 }
 
 /** Ein Name, der zum Item fuehrt. */
-export function ItemLink({ itemId }: { itemId: number }) {
+function ItemLink({ itemId }: { itemId: number }) {
   const { name, select } = useApp()
   return (
     <button
@@ -48,26 +65,6 @@ export function ItemLink({ itemId }: { itemId: number }) {
     >
       {name(itemId)}
     </button>
-  )
-}
-
-function Stepper({ value, onChange }: { value: number; onChange: (value: number) => void }) {
-  return (
-    <span className="inline-flex items-center overflow-hidden rounded-lg border">
-      <button type="button" aria-label="Fewer" onClick={() => onChange(Math.max(1, value - 1))} className="grid size-8 place-items-center hover:bg-muted">
-        <Minus className="size-3.5" aria-hidden />
-      </button>
-      <input
-        value={value}
-        inputMode="numeric"
-        aria-label="Quantity"
-        onChange={(event) => onChange(Math.max(1, parseInt(event.target.value, 10) || 1))}
-        className="h-8 w-11 border-x bg-transparent text-center text-sm outline-none"
-      />
-      <button type="button" aria-label="More" onClick={() => onChange(value + 1)} className="grid size-8 place-items-center hover:bg-muted">
-        <Plus className="size-3.5" aria-hidden />
-      </button>
-    </span>
   )
 }
 

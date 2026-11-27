@@ -1,5 +1,5 @@
 import type { ReactNode } from "react"
-import { Star, Timer, TrendingDown, TrendingUp } from "lucide-react"
+import { Minus, Plus, Star, Timer, TrendingDown, TrendingUp } from "lucide-react"
 
 import { Badge } from "@/components/ui/badge"
 import { Label } from "@/components/ui/label"
@@ -180,6 +180,48 @@ export function StarButton({ active, onToggle }: { active: boolean; onToggle: ()
     >
       <Star className="size-4" fill={active ? "currentColor" : "none"} aria-hidden />
     </button>
+  )
+}
+
+/** Eine Menge mit Minus und Plus. `small` passt in eine Tabellenzeile; mit `min` 0 entfernt das Minus die Zeile. */
+export function Stepper({
+  value,
+  onChange,
+  min = 1,
+  small,
+}: {
+  value: number
+  onChange: (value: number) => void
+  min?: number
+  small?: boolean
+}) {
+  const button = `grid ${small ? "size-7" : "size-8"} place-items-center hover:bg-muted`
+  return (
+    <span className="inline-flex items-center overflow-hidden rounded-lg border">
+      <button type="button" aria-label="Fewer" onClick={() => onChange(Math.max(min, value - 1))} className={button}>
+        <Minus className="size-3.5" aria-hidden />
+      </button>
+      <input
+        value={value}
+        inputMode="numeric"
+        aria-label="Quantity"
+        onChange={(event) => onChange(Math.max(1, parseInt(event.target.value, 10) || 1))}
+        className={`${small ? "h-7 w-10" : "h-8 w-11"} border-x bg-transparent text-center text-sm outline-none`}
+      />
+      <button type="button" aria-label="More" onClick={() => onChange(value + 1)} className={button}>
+        <Plus className="size-3.5" aria-hidden />
+      </button>
+    </span>
+  )
+}
+
+/** Eine Farbprobe fuer die Legende eines Diagramms. Ohne Farbe: ein leerer Rahmen. */
+export function Swatch({ color }: { color?: string }) {
+  return (
+    <i
+      className={`mr-1 inline-block h-2.5 w-3.5 rounded-xs align-[-1px] ${color ? "" : "shadow-[inset_0_0_0_1px_var(--border)]"}`}
+      style={color ? { background: color } : undefined}
+    />
   )
 }
 

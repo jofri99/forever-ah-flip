@@ -205,17 +205,6 @@ def test_http_date_matches_what_the_api_sends() -> None:
     assert store.http_date(dt.datetime(2026, 11, 14, 19, 19, 11)) == "Sat, 14 Nov 2026 19:19:11 GMT"
 
 
-@pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings.from_env(
-        {
-            "BLIZZARD_CLIENT_ID": "id",
-            "BLIZZARD_CLIENT_SECRET": "secret",
-            "AH_DATA_DIR": str(tmp_path / "data"),
-        }
-    )
-
-
 def test_run_end_to_end_over_two_snapshots(settings: Settings) -> None:
     client = FakeClient()
     warehouse = settings.warehouse_dir

@@ -40,7 +40,7 @@ from typing import Any
 import duckdb
 
 from . import collect, crafting, foreverdb_dump, names, store
-from .config import ROOT, Settings
+from .config import AH_KEEP, ROOT, UNREACHABLE_SIDE, Settings
 
 HOURLY = "hourly.parquet"
 MARKET = "market.parquet"
@@ -56,10 +56,6 @@ LADDER = "ladder.parquet"               # optional: braucht den aktuellen Stand 
 USUAL_MIN_POINTS = 24
 # So viele Haendler je Item reichen der Anzeige; wie viele es insgesamt sind, steht daneben.
 VENDORS_PER_ITEM = 3
-
-# Gesammelt wird das Auktionshaus der Horde. Haendler dieser Fraktion sind von dort
-# aus nicht erreichbar.
-UNREACHABLE_SIDE = "Alliance"
 
 DEFAULT_OUT = ROOT / "web" / "public" / "data"
 DEFAULT_DAYS = 14
@@ -136,6 +132,10 @@ def _load_local_list(con: duckdb.DuckDBPyConnection, settings: Settings) -> None
     )
 
 
+class LiveSnapshotError(RuntimeError):
+    """Der aktuelle Stand liess sich nicht von Blizzard holen."""
+
+
 def market_value(tiers: list[tuple[float, float]]) -> float | None:
     """Der Marktwert eines Stands nach dem Verfahren von TSMs AuctionDB.
 
@@ -181,10 +181,13 @@ def _load_live(con: duckdb.DuckDBPyConnection, settings: Settings, house: int, c
     liegen unter data/raw/publish und werden beim naechsten Lauf ueberschrieben.
     """
     raw = settings.raw_dir / "publish"
-    auctions = client.auctions(settings.ruleset, house, stream_to=raw / f"house{house}_auctions.json")
+    try:
+        auctions = client.auctions(settings.ruleset, house, stream_to=raw / f"house{house}_auctions.json")
+        commodities = client.commodities(settings.ruleset, house, stream_to=raw / f"house{house}_commodities.json")
+    except Exception as exc:  # Netz, Anmeldung, Zeitueberschreitung
+        raise LiveSnapshotError(f"Blizzard ist nicht erreichbar: {exc}") from exc
     if auctions.status != 200:
-        raise RuntimeError(f"Blizzard liefert den aktuellen Stand nicht (HTTP {auctions.status}).")
-    commodities = client.commodities(settings.ruleset, house, stream_to=raw / f"house{house}_commodities.json")
+        raise LiveSnapshotError(f"Blizzard liefert den aktuellen Stand nicht (HTTP {auctions.status}).")
     collect.load_snapshot(
         con, raw / f"house{house}_auctions.json",
         raw / f"house{house}_commodities.json" if commodities.status == 200 else None,
@@ -362,7 +365,7 @@ def _build_vendor_flips(con: duckdb.DuckDBPyConnection) -> int:
     `vendor_offers` voraus.
     """
     con.execute(
-        """
+        f"""
         CREATE OR REPLACE TEMP TABLE vendor_flips AS
         WITH cheapest AS (
             SELECT * FROM vendor_offers
@@ -371,8 +374,8 @@ def _build_vendor_flips(con: duckdb.DuckDBPyConnection) -> int:
         SELECT m.item_id, m.kind, m.item_class, m.item_subclass,
                c.price_per_item::DOUBLE                       AS vendor_price,
                m.min_price                                    AS ah_price,
-               round(m.min_price * 0.95 - c.price_per_item)   AS profit,
-               round((m.min_price * 0.95 - c.price_per_item) * 100.0 / c.price_per_item)
+               round(m.min_price * {AH_KEEP} - c.price_per_item)   AS profit,
+               round((m.min_price * {AH_KEEP} - c.price_per_item) * 100.0 / c.price_per_item)
                                                               AS profit_pct,
                m.n_listings, m.qty_sold_24h, m.sales_hours_24h,
                coalesce(c.limited, false)                     AS limited,
@@ -380,7 +383,7 @@ def _build_vendor_flips(con: duckdb.DuckDBPyConnection) -> int:
                c.vendor, c.zone, c.side, c.reputation,
                c.seen_in_forever
         FROM market m JOIN cheapest c USING (item_id)
-        WHERE m.min_price * 0.95 > c.price_per_item
+        WHERE m.min_price * {AH_KEEP} > c.price_per_item
         """
     )
     return con.execute("SELECT count(*) FROM vendor_flips").fetchone()[0]
@@ -623,6 +626,7 @@ def main(
     days: int = DEFAULT_DAYS,
     live: bool = True,
 ) -> int:
+    target = Path(out_dir or DEFAULT_OUT)
     # Den aktuellen Stand gibt es nur mit Zugangsdaten. Fehlen sie oder ist Blizzard nicht
     # erreichbar, entstehen die uebrigen Dateien trotzdem - nur eben ohne Preisleiter.
     client = None
@@ -632,19 +636,14 @@ def main(
         client = BlizzardClient(settings)
     try:
         try:
-            meta = build(settings, out_dir=out_dir or DEFAULT_OUT, house=house, days=days, client=client)
-        except RuntimeError:
-            raise
-        except Exception as exc:  # Netz, Anmeldung: kein Grund, gar nichts zu bauen
-            if client is None:
-                raise
-            print(f"Aktueller Stand nicht geholt ({exc}) - baue ohne Preisleiter.")
-            meta = build(settings, out_dir=out_dir or DEFAULT_OUT, house=house, days=days)
+            meta = build(settings, out_dir=target, house=house, days=days, client=client)
+        except LiveSnapshotError as exc:
+            print(f"{exc} Baue ohne Preisleiter.")
+            meta = build(settings, out_dir=target, house=house, days=days)
     except RuntimeError as exc:
         print(exc)
         return 1
 
-    target = Path(out_dir or DEFAULT_OUT)
     hourly = meta["files"][HOURLY]
     market = meta["files"][MARKET]
     print(f"Haus {meta['house']}, {meta['snapshots']} Staende von {meta['first_snapshot']} bis {meta['last_snapshot']}")

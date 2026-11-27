@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest"
 
-import { craft, flip, marketRow } from "./fixtures"
+import { craft, flip, marketRow } from "./test-fixtures"
 import {
   belowVendor,
   bestReset,

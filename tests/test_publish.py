@@ -22,13 +22,6 @@ def epoch(ts: dt.datetime) -> int:
     return int(ts.replace(tzinfo=dt.timezone.utc).timestamp())
 
 
-@pytest.fixture
-def settings(tmp_path: Path) -> Settings:
-    return Settings.from_env(
-        {"BLIZZARD_CLIENT_ID": "x", "BLIZZARD_CLIENT_SECRET": "x", "AH_DATA_DIR": str(tmp_path / "data")}
-    )
-
-
 def write_items(settings: Settings, ts: dt.datetime, rows: list[tuple]) -> None:
     """rows: (item_id, kind, n_listings, quantity, min_price, median_price)"""
     con = store.connect()
@@ -329,6 +322,35 @@ def test_live_snapshot_becomes_the_market_and_yields_the_price_ladder(warehouse:
     # Liefert Blizzard den Stand nicht, ist das ein klarer Fehler und kein halber Bau.
     with pytest.raises(RuntimeError, match="HTTP 503"):
         publish.build(warehouse, out_dir=out, client=FakeLive(live_at, [], [], status=503))
+
+
+def test_publish_still_builds_when_blizzard_is_unreachable(
+    warehouse: Settings, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+) -> None:
+    out = tmp_path / "site"
+
+    class Unreachable:
+        def __init__(self, settings: Settings) -> None:
+            pass
+
+        def auctions(self, ruleset, house, stream_to=None, if_modified_since=None) -> ApiResponse:
+            raise ConnectionError("kein Netz")
+
+    # Kein Netz: die Dateien entstehen trotzdem, nur eben ohne Preisleiter.
+    monkeypatch.setattr("collector.blizzard.BlizzardClient", Unreachable)
+    assert publish.main(warehouse, out_dir=out) == 0
+    assert "Blizzard ist nicht erreichbar: kein Netz" in capsys.readouterr().out
+    meta = json.loads((out / publish.META).read_text(encoding="utf-8"))
+    assert meta["ladder"] is None and meta["items"] == 2
+
+    # Dasselbe, wenn Blizzard antwortet, aber den Stand nicht liefert.
+    monkeypatch.setattr("collector.blizzard.BlizzardClient", lambda settings: FakeLive(T2, [], [], status=503))
+    assert publish.main(warehouse, out_dir=out) == 0
+    assert "HTTP 503" in capsys.readouterr().out
+
+    # Mit --no-live wird gar nicht erst gefragt.
+    monkeypatch.setattr("collector.blizzard.BlizzardClient", lambda settings: pytest.fail("nicht fragen"))
+    assert publish.main(warehouse, out_dir=out, live=False) == 0
 
 
 def test_usual_price_needs_enough_snapshots(settings: Settings, tmp_path: Path) -> None:

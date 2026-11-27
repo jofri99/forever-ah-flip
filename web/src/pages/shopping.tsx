@@ -1,7 +1,7 @@
 import { useMemo, useState } from "react"
-import { Copy, Minus, Plus, X } from "lucide-react"
+import { Copy, X } from "lucide-react"
 
-import { CooldownBadge, CountBadge, Hint, NameCell, Stat } from "@/components/bits"
+import { CooldownBadge, CountBadge, Hint, NameCell, Stat, Stepper } from "@/components/bits"
 import { Money, Profit } from "@/components/money"
 import { Empty, LinkButton, PageHeader, Panel } from "@/components/page"
 import { Button } from "@/components/ui/button"
@@ -128,21 +128,7 @@ export function ShoppingPage() {
                       </NameCell>
                     </td>
                     <td className="py-1.5" onClick={(event) => event.stopPropagation()}>
-                      <span className="inline-flex items-center overflow-hidden rounded-lg border">
-                        <button type="button" aria-label="Fewer" onClick={() => set(line.quantity - 1)} className="grid size-7 place-items-center hover:bg-muted">
-                          <Minus className="size-3.5" aria-hidden />
-                        </button>
-                        <input
-                          value={line.quantity}
-                          inputMode="numeric"
-                          aria-label="Quantity"
-                          onChange={(event) => set(Math.max(1, parseInt(event.target.value, 10) || 1))}
-                          className="h-7 w-10 border-x bg-transparent text-center outline-none"
-                        />
-                        <button type="button" aria-label="More" onClick={() => set(line.quantity + 1)} className="grid size-7 place-items-center hover:bg-muted">
-                          <Plus className="size-3.5" aria-hidden />
-                        </button>
-                      </span>
+                      <Stepper value={line.quantity} onChange={set} min={0} small />
                     </td>
                     <td className="px-2 py-1.5 text-right whitespace-nowrap">
                       <Profit value={profit == null ? null : profit * line.quantity} />

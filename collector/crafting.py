@@ -28,10 +28,7 @@ Lauf. Wer rechnen will, stellt drei Dinge bereit:
 from __future__ import annotations
 
 from . import foreverdb_dump, store
-from .config import Settings
-
-# Was das Auktionshaus vom Verkaufspreis behaelt.
-AH_CUT = 0.05
+from .config import AH_KEEP, Settings
 
 # Viele Zutaten fuehrt jeder zweite Haendler zum selben Preis. Genannt wird dann einer,
 # zu dem man ohnehin kommt, statt irgendeiner am Ende der Welt.
@@ -181,7 +178,7 @@ def costs_sql(create: str) -> str:
     `create` ist der Anfang der Anweisung: "CREATE OR REPLACE VIEW" in der Datenbank,
     "CREATE OR REPLACE TEMP TABLE" beim Bauen der Anzeige-Dateien.
     """
-    keep = 1 - AH_CUT
+    keep = AH_KEEP
     cheaper_at_vendor = "v.vendor_price IS NOT NULL AND (a.ah_price IS NULL OR v.vendor_price <= a.ah_price)"
     return f"""
 -- Was ein Item kostet, wenn man es kaufen muss: beim Haendler oder im Auktionshaus,
