@@ -4,7 +4,6 @@ data/*
 !data/README.md
 
 *.bak
-*.lua.bak
 .DS_Store
 Thumbs.db
 
