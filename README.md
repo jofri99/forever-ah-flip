@@ -375,9 +375,11 @@ Parquet-Leser das ohne Zusatzpaket verstehen.
 
 Zwei Preise und ein Trend neben dem guenstigsten Angebot:
 
-- Der **uebliche Preis** (`usual_price`) ist der Median des guenstigsten Angebots ueber alle
-  Staende des Zeitfensters. Er steht erst da, wenn ein Item in mindestens 24 Staenden vorkam.
-  An ihm misst sich, ob ein Angebot guenstig ist und wohin ein Reset zielen darf.
+- Der **uebliche Preis** (`usual_price`) ist der Median des guenstigsten Angebots ueber die
+  Staende der letzten sieben Tage. Aelteres zaehlt nicht: der Preissturz nach dem Erscheinen
+  eines Items oder eine alte Preislage sagt nichts darueber, wo der Preis heute steht. Er
+  steht erst da, wenn ein Item in diesen Tagen in mindestens 24 Staenden vorkam. An ihm misst
+  sich, ob ein Angebot guenstig ist und wohin ein Reset zielen darf.
 - Der **Marktwert** (`market_value`) wird aus der Preisleiter nach dem Verfahren von TSMs
   AuctionDB gerechnet: die guenstigsten 30 % der Stuecke, nach den ersten 15 % Schluss bei
   einem Preissprung von 20 %, Ausreisser jenseits von 1,5 Standardabweichungen weg, der Rest
@@ -454,9 +456,9 @@ sortiert), im Markt, in der Seitenleiste und aufgeschluesselt auf der Seite des 
 Score = Wurzel(Marge x Gewinn) x Absatz x Frische x Abzuege
 ```
 
-Bewertet wird der Kauf von allem, was zum ueblichen Preis nach der Gebuehr noch Gewinn bringt -
-aber nicht mehr, als der eigene Anteil an den Verkaeufen im Zeitraum absetzt, und nicht mehr,
-als das Gold hergibt.
+Bewertet wird der Kauf, der am besten abschneidet: die guenstigsten Angebote bis zu der Stufe,
+ab der mehr zu kaufen die Marge staerker duennt, als es Gewinn bringt. Nie mehr, als der eigene
+Anteil an den Verkaeufen im Zeitraum absetzt, und nie mehr, als das Gold hergibt.
 
 | Teil | Volle Punktzahl | Null |
 |---|---|---|
@@ -478,7 +480,9 @@ blaettern, Doppelklick oder Enter oeffnet die Vollseite. Dort steht alles:
 
 - Kennzahlen: Kauf-Score, guenstigstes Angebot, ueblicher Preis, Marktwert, Median, Veraenderung,
   Trend, Verkaeufe und Neueinstellungen am Tag, Angebote, Haendlerpreis.
-- Der Verlauf: guenstigster Preis, Median und darunter die verkaufte Menge je Stand.
+- Der Verlauf: guenstigster Preis, Median und darunter die verkaufte Menge je Stand. Liegt
+  zwischen tiefstem und hoechstem Preis mehr als das Achtfache, wird die Achse logarithmisch -
+  sonst drueckt ein einzelner Ausschlag alles andere an den unteren Rand.
 - Die Heatmap: Wochentag mal Stunde in Ortszeit, umschaltbar zwischen Preis gegenueber dem
   ueblichen Preis und verkaufter Menge. Sie rechnet aus dem Verlauf des Zeitfensters; mit 14
   Tagen hat jede Stunde zwei Stichproben, mit `publish --days 28` vier.

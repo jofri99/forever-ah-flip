@@ -373,6 +373,22 @@ def test_usual_price_needs_enough_snapshots(settings: Settings, tmp_path: Path) 
     ]
 
 
+def test_usual_price_forgets_what_is_older_than_a_week(settings: Settings, tmp_path: Path) -> None:
+    # Neun Tage, alle zwei Stunden. Fuenf Tage lang kostet das Item 10.000, dann stuerzt es auf
+    # 100 und bleibt dort. Ueber alle Staende waere der Median noch 10.000 - in den letzten
+    # sieben Tagen ueberwiegt der neue Preis.
+    start = dt.datetime(2026, 11, 14, 0, 0, 0)
+    for step in range(108):
+        price = 10_000 if step < 60 else 100
+        write_items(settings, start + dt.timedelta(hours=2 * step), [(100, "commodity", 1, 1, price, price)])
+
+    out = tmp_path / "site"
+    meta = publish.build(settings, out_dir=out)
+    # 85 Staende liegen in den sieben Tagen, der vor genau sieben Tagen eingeschlossen.
+    assert query(out / publish.MARKET, "SELECT usual_price, usual_points FROM FILE") == [(100.0, 85)]
+    assert meta["usual_days"] == 7
+
+
 def test_trend_tells_a_steady_decline_from_a_dip(settings: Settings, tmp_path: Path) -> None:
     # Vier Tage, stuendlich. Item 100 verliert jeden Tag 5 %. Item 300 steht still und
     # bricht erst in den letzten drei Stunden ein. Item 500 gibt es erst seit zehn Stunden.

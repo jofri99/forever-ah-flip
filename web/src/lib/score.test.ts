@@ -30,6 +30,25 @@ describe("Kauf-Score", () => {
     expect(result.why).toBeNull()
   })
 
+  it("kauft nicht mit, was die Marge nur verduennt", () => {
+    // Tausend verkauft am Tag: der eigene Anteil koennte 300 Stueck absetzen. Die 200 Stueck
+    // knapp unter dem, was der uebliche Preis hergibt, braechten je einen Silber - und
+    // druecken die Rendite von 90 % auf 8 %.
+    const busy = { ...row, qty_sold_24h: 1_000 }
+    const result = buyScore(busy, [[5_000, 30], [9_400, 200]], a, levels)
+    expect(result.plan).toMatchObject({ units: 30, profit: 135_000 })
+    expect(result.score).toBe(75)
+
+    // Zwei Stueck zum halben Preis sind kaum der Rede wert; die hundert dahinter machen den Kauf aus.
+    const deep = buyScore(busy, [[5_000, 2], [6_000, 100]], a, levels)
+    expect(deep.plan).toMatchObject({ units: 102, profit: 359_000 })
+
+    // Lohnt keine Stufe die Muehe, steht der Kauf mit dem meisten Gewinn je Einsatz da.
+    const small = buyScore(busy, [[5_000, 1], [9_400, 5]], a, levels)
+    expect(small.plan).toMatchObject({ units: 1 })
+    expect(small.score).toBe(0)
+  })
+
   it("zieht fuer einen Abwaertstrend und schnellen Nachschub ab", () => {
     expect(buyScore({ ...row, trend_pct_day: -8, trend_fit: 0.8 }, tiers, a, levels)).toMatchObject({
       score: 19,

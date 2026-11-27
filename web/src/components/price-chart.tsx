@@ -1,10 +1,11 @@
-import { useEffect, useRef } from "react"
+import { useEffect, useMemo, useRef } from "react"
 import {
   createChart,
   CrosshairMode,
   HistogramSeries,
   LineSeries,
   LineStyle,
+  PriceScaleMode,
 } from "lightweight-charts"
 import type { IChartApi, IPriceLine, ISeriesApi, UTCTimestamp } from "lightweight-charts"
 
@@ -52,6 +53,27 @@ interface ChartParts {
 
 const chartTime = (ts: number) => toLocalChartTime(ts) as UTCTimestamp
 
+/** Ab dieser Spanne zwischen tiefstem und hoechstem Preis wird die Achse logarithmisch. */
+const LOG_FROM = 8
+
+/**
+ * Ein einzelner Ausschlag - etwa der Preis am ersten Tag eines neuen Items - drueckt auf
+ * einer linearen Achse alles andere an den unteren Rand. Logarithmisch bleibt beides lesbar.
+ */
+function needsLogScale(series: readonly SeriesPoint[]): boolean {
+  let low = Infinity
+  let high = 0
+  for (const point of series) {
+    for (const price of [point.min_price, point.median_price]) {
+      if (price != null && price > 0) {
+        low = Math.min(low, price)
+        high = Math.max(high, price)
+      }
+    }
+  }
+  return high / low >= LOG_FROM
+}
+
 interface PriceChartProps {
   series: SeriesPoint[]
   /** Hoehe in Pixeln: in der Seitenleiste klein, auf der Vollseite gross. */
@@ -68,6 +90,7 @@ export function PriceChart({ series, height = 400, usual = null }: PriceChartPro
   const containerRef = useRef<HTMLDivElement>(null)
   const partsRef = useRef<ChartParts | null>(null)
   const usualRef = useRef<IPriceLine | null>(null)
+  const log = useMemo(() => needsLogScale(series), [series])
 
   useEffect(() => {
     const container = containerRef.current
@@ -142,8 +165,9 @@ export function PriceChart({ series, height = 400, usual = null }: PriceChartPro
         ? sold.map((point) => ({ time: chartTime(point.ts), value: point.qty_sold as number }))
         : series.map((point) => ({ time: chartTime(point.ts), value: point.n_listings })),
     )
+    min.priceScale().applyOptions({ mode: log ? PriceScaleMode.Logarithmic : PriceScaleMode.Normal })
     chart.timeScale().fitContent()
-  }, [series])
+  }, [series, log])
 
   useEffect(() => {
     const min = partsRef.current?.min
@@ -162,5 +186,17 @@ export function PriceChart({ series, height = 400, usual = null }: PriceChartPro
           })
   }, [usual])
 
-  return <div ref={containerRef} className="w-full" style={{ height }} />
+  return (
+    <div className="relative w-full" style={{ height }}>
+      <div ref={containerRef} className="size-full" />
+      {log && (
+        <span
+          className="pointer-events-none absolute top-1 left-1 z-10 rounded bg-card/80 px-1 text-[10px] text-muted-foreground"
+          title="The prices span a wide range, so the axis is logarithmic: equal distances are equal ratios"
+        >
+          log scale
+        </span>
+      )}
+    </div>
+  )
 }

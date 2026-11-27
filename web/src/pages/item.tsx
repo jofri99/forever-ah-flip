@@ -90,7 +90,11 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
           </Stat>
           <Stat
             label="Usual price"
-            sub={row.usual_price != null ? `median of ${formatInt(row.usual_points)} snapshots` : `only ${row.usual_points} snapshots so far`}
+            sub={
+              row.usual_price != null
+                ? `median of the last ${app.meta.usual_days ?? 7} days`
+                : `only ${row.usual_points} snapshots in ${app.meta.usual_days ?? 7} days`
+            }
           >
             <Money value={row.usual_price} />
           </Stat>

@@ -150,9 +150,10 @@ export function BuyScorePanel({ itemId }: { itemId: number }) {
       </div>
 
       <Hint>
-        Score = √(margin × profit) × demand × fresh low × deductions. It assumes you buy every listing that still
-        pays at the usual price, but no more than your share of sales moves in the time you allow, and no more than
-        your gold. It changes with the assumptions in the bar above.
+        Score = √(margin × profit) × demand × fresh low × deductions. It rates the purchase that scores best: the
+        cheapest listings up to the step where buying more would thin the margin more than it adds profit. Never
+        more than your share of sales moves in the time you allow, and never more than your gold. It changes with
+        the assumptions in the bar above.
       </Hint>
     </div>
   )

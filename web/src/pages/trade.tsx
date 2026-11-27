@@ -99,7 +99,7 @@ export function LowPage() {
     <>
       <PageHeader title="Buy low">
         Listings well below what the item usually costs. The usual price is the median of the lowest listing over
-        the {formatInt(app.meta.snapshots)} snapshots of the last {app.meta.window_days} days. You buy no more than
+        the last {app.meta.usual_days ?? 7} days; what it cost before that does not count. You buy no more than
         your share of sales can move in the time you allow; profit assumes you relist at the usual price, after
         the 5% cut. An item that has been falling 3% a day or more, steadily across the whole history, is on a
         downtrend, not at a low: those are left out unless you switch them on. The score weighs margin, profit,

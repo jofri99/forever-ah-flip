@@ -52,7 +52,10 @@ CRAFT_REAGENTS = "craft_reagents.parquet"
 ITEM_VENDORS = "item_vendors.parquet"   # ebenso: braucht den Abzug der Haendler
 LADDER = "ladder.parquet"               # optional: braucht den aktuellen Stand von Blizzard
 
-# Ab so vielen Staenden gilt der uebliche Preis eines Items als belastbar.
+# Der uebliche Preis zaehlt nur die letzten Tage: was davor war - der Preissturz nach dem
+# Erscheinen eines Items, eine alte Preislage - sagt nichts darueber, wo der Preis heute steht.
+USUAL_DAYS = 7
+# Ab so vielen Staenden in diesen Tagen gilt der uebliche Preis eines Items als belastbar.
 USUAL_MIN_POINTS = 24
 # Ein Trend braucht mehr Geschichte als ein Median: so viele Staende ueber so viele Tage.
 TREND_MIN_POINTS = 48
@@ -270,18 +273,21 @@ def _build_market(con: duckdb.DuckDBPyConnection, live_ts: int | None = None) ->
         else "SELECT h.item_id, h.kind, h.ts, h.min_price, h.p25_price, h.median_price, h.n_listings, h.quantity "
              "FROM hourly h, latest WHERE h.ts = latest.ts"
     )
-    trend_known = f"u.usual_points >= {TREND_MIN_POINTS} AND u.trend_days >= {TREND_MIN_DAYS}"
+    trend_known = f"u.trend_points >= {TREND_MIN_POINTS} AND u.trend_days >= {TREND_MIN_DAYS}"
     con.execute(
         f"""
         CREATE OR REPLACE TEMP TABLE market AS
         WITH latest AS (SELECT max(ts) AS ts FROM hourly),
         cur AS ({current}),
-        -- Der uebliche Preis: der Median des guenstigsten Angebots ueber alle Staende des Fensters.
-        -- Der Trend: eine Gerade durch den Logarithmus desselben Preises. Ihre Steigung ist die
+        -- Der uebliche Preis: der Median des guenstigsten Angebots ueber die letzten USUAL_DAYS Tage.
+        -- Der Trend: eine Gerade durch den Logarithmus desselben Preises, ueber das ganze Fenster. Ihre Steigung ist die
         -- Aenderung je Tag; trend_fit (r2) sagt, wie genau der Verlauf der Geraden folgt. Ein
         -- stetiger Verfall hat beides, ein Ausreisser nach unten nur einen niedrigen Preis.
         usual AS (
-            SELECT item_id, round(median(p)) AS usual_price, count(*)::INTEGER AS usual_points,
+            SELECT item_id,
+                   round(median(p) FILTER (WHERE age_days >= -{USUAL_DAYS}))       AS usual_price,
+                   (count(*) FILTER (WHERE age_days >= -{USUAL_DAYS}))::INTEGER    AS usual_points,
+                   count(*)                          AS trend_points,
                    regr_slope(ln(p), age_days)       AS trend_slope,
                    regr_r2(ln(p), age_days)          AS trend_fit,
                    max(age_days) - min(age_days)     AS trend_days
@@ -607,6 +613,8 @@ def build(
         "built_at": dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
         "house": house,
         "window_days": days,
+        # Ueber so viele Tage zaehlt der uebliche Preis.
+        "usual_days": USUAL_DAYS,
         "first_snapshot": _iso(first_ts),
         "last_snapshot": _iso(last_ts),
         "snapshots": snapshots,

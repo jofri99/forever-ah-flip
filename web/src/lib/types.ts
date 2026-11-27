@@ -29,7 +29,7 @@ export interface MarketRow {
   vendor_sell: number | null
   /** Listenpreis beim Haendler je Stueck. Steht bei jedem Item, auch wenn es kein Haendler fuehrt. */
   vendor_buy: number | null
-  /** Der uebliche Preis: Median des guenstigsten Angebots im Zeitfenster. Fehlt bei zu kurzer Geschichte. */
+  /** Der uebliche Preis: Median des guenstigsten Angebots der letzten Tage (`usual_days`). Fehlt bei zu kurzer Geschichte. */
   usual_price: number | null
   /** Auf wie vielen Staenden der uebliche Preis beruht. */
   usual_points: number
@@ -61,6 +61,8 @@ export interface Meta {
   built_at: string
   house: number
   window_days: number
+  /** Ueber so viele Tage zaehlt der uebliche Preis. Fehlt in aelteren Builds. */
+  usual_days?: number
   first_snapshot: string
   last_snapshot: string
   snapshots: number

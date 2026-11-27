@@ -53,9 +53,10 @@ export interface BuyScore {
 const clamp = (value: number) => Math.max(0, Math.min(1, value))
 
 /**
- * Bewertet den Kauf von allem, was zum ueblichen Preis noch Gewinn bringt -
- * aber nicht mehr, als der eigene Anteil an den Verkaeufen im Zeitraum absetzt,
- * und nicht mehr, als das Gold hergibt.
+ * Bewertet den Kauf, der am besten abschneidet: die guenstigsten Angebote bis zu
+ * der Stufe, ab der mehr zu kaufen die Marge staerker duennt, als es Gewinn
+ * bringt. Nie mehr, als der eigene Anteil an den Verkaeufen im Zeitraum absetzt,
+ * und nie mehr, als das Gold hergibt.
  */
 export function buyScore(
   row: MarketRow,
@@ -85,7 +86,14 @@ export function buyScore(
   const limit = usual * AH_KEEP
   const sold = soldPerDay(row)
   const maxUnits = sold == null ? 1 : Math.max(1, Math.floor(sold * a.share * a.horizon))
-  let k = -1
+  const marginOf = (ret: number) => clamp(ret / FULL_RETURN)
+  // Logarithmisch: zwischen 50 Silber und 100 Gold liegen gut zwei Groessenordnungen.
+  const profitOf = (amount: number) =>
+    amount <= MIN_PROFIT ? 0 : clamp(Math.log(amount / MIN_PROFIT) / Math.log(fullProfit / MIN_PROFIT))
+
+  // Jede Stufe mehr bringt Gewinn und kostet Marge. Gesucht ist die Stufe, bis zu der
+  // beides zusammen am meisten zaehlt; bei Gleichstand die mit mehr Gewinn je Einsatz.
+  let best: { k: number; units: number; value: number; edge: number } | null = null
   let units = 0
   let cost = 0
   for (let i = 0; i < tiers.length; i++) {
@@ -93,17 +101,19 @@ export function buyScore(
     if (price >= limit) break
     const take = Math.min(quantity, maxUnits - units, Math.floor((gold - cost) / price))
     if (take <= 0) break
-    k = i
     units += take
     cost += take * price
+    const gain = units * limit - cost
+    const value = marginOf(gain / cost) * profitOf(gain)
+    const edge = (gain * gain) / cost
+    if (!best || value > best.value || (value === best.value && edge > best.edge)) best = { k: i, units, value, edge }
   }
-  if (k < 0) return none(tiers[0][0] >= limit ? "not-cheap" : "no-gold", 0)
-  const p = plan(row, tiers, k, "usual", a, units)
+  if (!best) return none(tiers[0][0] >= limit ? "not-cheap" : "no-gold", 0)
+  const p = plan(row, tiers, best.k, "usual", a, best.units)
   if (!p || p.profit <= 0) return none("not-cheap", 0)
 
-  const margin = clamp(p.ret / FULL_RETURN)
-  // Logarithmisch: zwischen 50 Silber und 100 Gold liegen gut zwei Groessenordnungen.
-  const profit = p.profit <= MIN_PROFIT ? 0 : clamp(Math.log(p.profit / MIN_PROFIT) / Math.log(fullProfit / MIN_PROFIT))
+  const margin = marginOf(p.ret)
+  const profit = profitOf(p.profit)
   const demand = p.days == null ? 0 : clamp(a.horizon / p.days)
   // Ohne Stand aus den letzten 24 Stunden laesst sich die Frische nicht sagen: halbe Punktzahl.
   const fresh = row.high_24h == null ? 0.5 : clamp((row.high_24h / usual - STALE_AT) / (FRESH_AT - STALE_AT))
