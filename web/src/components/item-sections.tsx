@@ -2,7 +2,7 @@ import { useState } from "react"
 import type { ReactNode } from "react"
 import { Maximize2, ShoppingCart } from "lucide-react"
 
-import { CooldownBadge, Hint, Stepper, Tag, TrendBadge } from "@/components/bits"
+import { CooldownBadge, Hint, ScoreMeter, Stepper, Tag, TrendBadge } from "@/components/bits"
 import { Count, Money, Profit } from "@/components/money"
 import { Button } from "@/components/ui/button"
 import { useApp } from "@/lib/app"
@@ -296,6 +296,9 @@ export function TradeSection({ itemId, series }: { itemId: number; series?: read
   return (
     <Section title="Trade it">
       <Lines>
+        <Line label="Buy score">
+          <ScoreMeter value={app.scores.get(itemId)?.score} />
+        </Line>
         {row.usual_price != null && (
           <Line label="Usual price">
             <Money value={row.usual_price} />{" "}

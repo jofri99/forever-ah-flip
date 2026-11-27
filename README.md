@@ -446,15 +446,44 @@ ins Gold passen. Drei Marken warnen:
   die Mitte einer fallenden Linie. Buy low laesst solche Items weg, solange *Hide downtrends*
   an ist; die Startseite und die Zahl in der Navigation zaehlen sie nie mit.
 
+**Der Kauf-Score** sagt in einer Zahl von 0 bis 100, wie sehr es sich lohnt, ein Item jetzt zu
+kaufen und zum ueblichen Preis wieder einzustellen. Er steht in Buy low (dort wird nach ihm
+sortiert), im Markt, in der Seitenleiste und aufgeschluesselt auf der Seite des Items:
+
+```
+Score = Wurzel(Marge x Gewinn) x Absatz x Frische x Abzuege
+```
+
+Bewertet wird der Kauf von allem, was zum ueblichen Preis nach der Gebuehr noch Gewinn bringt -
+aber nicht mehr, als der eigene Anteil an den Verkaeufen im Zeitraum absetzt, und nicht mehr,
+als das Gold hergibt.
+
+| Teil | Volle Punktzahl | Null |
+|---|---|---|
+| **Marge** | 100 % Rendite, also gekauft fuer weniger als die Haelfte des ueblichen Preises | kein Gewinn |
+| **Gewinn** | 20 % des eigenen Golds, mindestens 10 Gold; dazwischen logarithmisch | 50 Silber |
+| **Absatz** | der eigene Anteil setzt die Stueckzahl im Zeitraum ab | keine Verkaeufe |
+| **Frische** | das guenstigste Angebot stand in 24 Stunden noch bei 90 % des ueblichen Preises | es kam nicht ueber 60 % |
+
+Marge und Gewinn zaehlen gemeinsam: viel Rendite auf ein paar Kupfer ist so wenig wert wie ein
+grosser Betrag mit hauchduenner Marge. Absatz und Frische sind Bedingungen - fehlt eine, hilft
+der Rest nicht. Die Frische trennt den frischen Ausreisser vom Markt, der schon laenger tief
+steht: ein Schnaeppchen, das seit einem Tag niemand will, ist keines. Abzuege gibt es fuer
+einen Abwaertstrend (mal 0,25) und fuer schnellen Nachschub (mal 0,8). Ab 70 heisst der Score
+*Strong*, ab 40 *Decent*, ab 15 *Thin*, darunter *Skip*. Er haengt an den Annahmen und am
+eingetragenen Gold und aendert sich mit ihnen.
+
 **Das Item.** Ein Klick auf eine Zeile oeffnet es in der Seitenleiste, die Pfeiltasten
 blaettern, Doppelklick oder Enter oeffnet die Vollseite. Dort steht alles:
 
-- Kennzahlen: guenstigstes Angebot, ueblicher Preis, Marktwert, Median, Veraenderung,
+- Kennzahlen: Kauf-Score, guenstigstes Angebot, ueblicher Preis, Marktwert, Median, Veraenderung,
   Trend, Verkaeufe und Neueinstellungen am Tag, Angebote, Haendlerpreis.
 - Der Verlauf: guenstigster Preis, Median und darunter die verkaufte Menge je Stand.
 - Die Heatmap: Wochentag mal Stunde in Ortszeit, umschaltbar zwischen Preis gegenueber dem
   ueblichen Preis und verkaufter Menge. Sie rechnet aus dem Verlauf des Zeitfensters; mit 14
   Tagen hat jede Stunde zwei Stichproben, mit `publish --days 28` vier.
+- *Is it worth buying?*: der Kauf-Score mit seinen vier Teilen, den Abzuegen und dem Kauf,
+  auf dem er beruht.
 - Die Preisleiter mit Rechner: ein Schieber waehlt, bis zu welcher Stufe gekauft wird.
   Darunter die ganze Rechnung - Stueckzahl, Kosten, Zielpreis mit Begruendung, Erloes,
   Gebuehr, Gewinn, Rendite, ab wann das Gold zurueck ist, Dauer des Abverkaufs, Nachschub,
@@ -484,7 +513,9 @@ in Ortszeit, hell und dunkel folgen dem System oder dem Knopf oben rechts.
 
 ```
 web/src/
-  lib/trade.ts       die Rechnung: Rezepte, Flips, Low Buy, Reset, Nachschub, Urteil
+  lib/trade.ts       die Rechnung: Rezepte, Flips, Low Buy, Reset, Nachschub, Trend, Urteil
+  lib/score.ts       der Kauf-Score und seine Teile
+  lib/relist.ts      der Preis zum Wiedereinstellen: Rueckblick ueber den Verlauf
   lib/app.tsx        geladene Daten, Annahmen, Berufe, Merk- und Einkaufsliste als ein Kontext
   lib/route.ts       Seite und Item in der Adresse
   lib/data.ts        liest die Parquet-Dateien, hourly.parquet gezielt je Item
@@ -495,8 +526,9 @@ web/src/
   components/        Tabelle, Seitenleiste, Heatmap, Preisleiter, Einstellpreis, Diagramm; ui/ kommt von shadcn
 ```
 
-Die Rechnung steht in `lib/trade.ts` als reine Funktionen und ist getestet; die Oberflaeche
-zeigt nur an, was dort herauskommt. Das Diagramm zeichnet TradingViews `lightweight-charts`,
+Die Rechnung steht in `lib/trade.ts`, `lib/score.ts` und `lib/relist.ts` als reine Funktionen
+und ist getestet; die Oberflaeche zeigt nur an, was dort herauskommt. Das Diagramm zeichnet
+TradingViews `lightweight-charts`,
 die Parquet-Dateien liest `hyparquet`. Die Diagramm-Bibliothek wird erst geladen, wenn
 jemand ein Item oeffnet. Sie steht unter Apache-2.0 und verlangt die Namensnennung samt Link,
 die im Diagramm und in der Fusszeile steht.

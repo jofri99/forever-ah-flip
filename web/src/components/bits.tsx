@@ -197,6 +197,22 @@ export function StarButton({ active, onToggle }: { active: boolean; onToggle: ()
   )
 }
 
+/**
+ * Der Kauf-Score: 0 bis 100 mit einem Balken, damit sich eine Spalte auf einen Blick
+ * lesen laesst. `bare` zeigt nur den Balken. Ohne Wert steht ein Strich.
+ */
+export function ScoreMeter({ value, wide, bare }: { value: number | null | undefined; wide?: boolean; bare?: boolean }) {
+  if (value == null) return <span className="text-muted-foreground">–</span>
+  return (
+    <span className="inline-flex items-center gap-1.5 tabular-nums" title={`Buy score ${value} of 100`}>
+      <span className={`h-1.5 ${wide ? "w-24" : "w-8"} overflow-hidden rounded-full bg-border`} aria-hidden>
+        <span className="block h-full rounded-full bg-(--viz)" style={{ width: `${value}%` }} />
+      </span>
+      {!bare && <span className="w-6 text-right">{value}</span>}
+    </span>
+  )
+}
+
 /** Eine Menge mit Minus und Plus. `small` passt in eine Tabellenzeile; mit `min` 0 entfernt das Minus die Zeile. */
 export function Stepper({
   value,

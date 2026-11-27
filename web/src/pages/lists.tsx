@@ -1,6 +1,6 @@
 import { useMemo, useState } from "react"
 
-import { CooldownBadge, CountBadge, Hint, NameCell, SpikeBadge, Tag, Toggle } from "@/components/bits"
+import { CooldownBadge, CountBadge, Hint, NameCell, ScoreMeter, SpikeBadge, Tag, Toggle } from "@/components/bits"
 import { DataTable } from "@/components/data-table"
 import type { DataColumn } from "@/components/data-table"
 import { Change, Count, Money, Profit } from "@/components/money"
@@ -287,6 +287,7 @@ function useMarketColumns(): DataColumn<MarketRow>[] {
       { key: "min_price", label: "Lowest", numeric: true, width: 120, value: (row) => row.min_price, cell: (row) => <Money value={row.min_price} /> },
       { key: "usual_price", label: "Usual", numeric: true, width: 120, value: (row) => row.usual_price, cell: (row) => <Money value={row.usual_price} /> },
       { key: "change_24h_pct", label: "24h", numeric: true, width: 100, value: (row) => row.change_24h_pct, cell: (row) => <Change value={row.change_24h_pct} /> },
+      { key: "score", label: "Buy score", numeric: true, width: 110, value: (row) => app.scores.get(row.item_id)?.score, cell: (row) => <ScoreMeter value={app.scores.get(row.item_id)?.score} /> },
       { key: "n_listings", label: "Listings", numeric: true, width: 100, value: (row) => row.n_listings, cell: (row) => <Count value={row.n_listings} /> },
       { key: "quantity", label: "Units", numeric: true, width: 110, value: (row) => row.quantity, cell: (row) => <Count value={row.quantity} /> },
       { key: "qty_sold_24h", label: "Sold/day", numeric: true, width: 110, value: (row) => row.qty_sold_24h, cell: (row) => <Count value={row.qty_sold_24h} /> },
@@ -372,7 +373,7 @@ export function MarketPage() {
         itemOf={(row) => row.item_id}
         rowId={rowKey}
         initialSort={{ key: "qty_sold_24h", dir: -1 }}
-        minWidth={980}
+        minWidth={1090}
         emptyText="No item matches the search."
       />
     </>
@@ -401,7 +402,7 @@ export function WatchlistPage() {
           columns={columns}
           itemOf={(row) => row.item_id}
           initialSort={{ key: "name", dir: 1 }}
-          minWidth={980}
+          minWidth={1090}
           emptyText=""
         />
       )}

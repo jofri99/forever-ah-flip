@@ -1,6 +1,18 @@
 import { useMemo, useState } from "react"
 
-import { Assume, FallBadge, Hint, NameCell, Segmented, Stat, Tag, Toggle, TrendBadge, WarnBadge } from "@/components/bits"
+import {
+  Assume,
+  FallBadge,
+  Hint,
+  NameCell,
+  ScoreMeter,
+  Segmented,
+  Stat,
+  Tag,
+  Toggle,
+  TrendBadge,
+  WarnBadge,
+} from "@/components/bits"
 import { DataTable } from "@/components/data-table"
 import type { DataColumn } from "@/components/data-table"
 import { Count, Dash, Money, Profit, Share } from "@/components/money"
@@ -62,6 +74,7 @@ export function LowPage() {
           </NameCell>
         ),
       },
+      { key: "score", label: "Score", numeric: true, width: 90, value: (p) => app.scores.get(p.itemId)?.score, cell: (p) => <ScoreMeter value={app.scores.get(p.itemId)?.score} /> },
       { key: "min", label: "Cheapest", numeric: true, width: 110, value: (p) => p.rows[0].price, cell: (p) => <Money value={p.rows[0].price} /> },
       { key: "usual", label: "Usual", numeric: true, width: 110, value: (p) => p.target, cell: (p) => <Money value={p.target} /> },
       { key: "pct", label: "Of usual", numeric: true, width: 90, value: (p) => p.rows[0].price / p.target, cell: (p) => <Share value={p.rows[0].price / p.target} /> },
@@ -89,7 +102,8 @@ export function LowPage() {
         the {formatInt(app.meta.snapshots)} snapshots of the last {app.meta.window_days} days. You buy no more than
         your share of sales can move in the time you allow; profit assumes you relist at the usual price, after
         the 5% cut. An item that has been falling 3% a day or more, steadily across the whole history, is on a
-        downtrend, not at a low: those are left out unless you switch them on.
+        downtrend, not at a low: those are left out unless you switch them on. The score weighs margin, profit,
+        demand and how fresh the low price is; open an item to see it broken down.
       </PageHeader>
       <FilterBar>
         <SearchInput value={query} onChange={setQuery} placeholder="Filter items…" />
@@ -116,8 +130,8 @@ export function LowPage() {
         rows={rows}
         columns={columns}
         itemOf={(p) => p.itemId}
-        initialSort={{ key: "profit", dir: -1 }}
-        minWidth={1080}
+        initialSort={{ key: "score", dir: -1 }}
+        minWidth={1170}
         emptyText="Nothing is listed that far below its usual price."
       />
       <Hint className="mt-2">

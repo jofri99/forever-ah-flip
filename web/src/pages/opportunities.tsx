@@ -82,7 +82,10 @@ export function OpportunitiesPage({ onSetProfessions }: { onSetProfessions: () =
     return list.sort((x, y) => y.total - x.total)
   }, [app.rows, app.ladder])
 
-  const low = useMemo(() => [...app.trades.lowSteady].sort((x, y) => y.profit - x.profit), [app.trades.lowSteady])
+  const low = useMemo(() => {
+    const score = (itemId: number) => app.scores.get(itemId)?.score ?? 0
+    return [...app.trades.lowSteady].sort((x, y) => score(y.itemId) - score(x.itemId) || y.profit - x.profit)
+  }, [app.trades.lowSteady, app.scores])
   const resets = useMemo(() => [...app.trades.resets].sort((x, y) => y.profit - x.profit), [app.trades.resets])
   const hasLadder = app.ladder.size > 0
 
@@ -171,7 +174,7 @@ export function OpportunitiesPage({ onSetProfessions }: { onSetProfessions: () =
             title="Buy low"
             count={low.length}
             action={<LinkButton onClick={() => app.go("low")}>View all →</LinkButton>}
-            sub={`Listed at ${Math.round(app.a.buyAt * 100)}% of the usual price or less, and not on a steady downtrend. Buy, relist at the usual price.`}
+            sub={`Listed at ${Math.round(app.a.buyAt * 100)}% of the usual price or less, and not on a steady downtrend. Buy, relist at the usual price. Best buy score first.`}
           >
             {low.slice(0, TOP).map((p) => {
               const row = app.rows.get(p.itemId)
@@ -182,6 +185,7 @@ export function OpportunitiesPage({ onSetProfessions }: { onSetProfessions: () =
                   title={
                     <>
                       <Name>{app.name(p.itemId)}</Name>
+                      <Tag solid>Score {app.scores.get(p.itemId)?.score ?? 0}</Tag>
                       <Tag>{Math.round(((row?.min_price ?? 0) / p.target) * 100)}% of usual</Tag>
                       <FallBadge row={row} />
                     </>

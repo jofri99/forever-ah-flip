@@ -4,6 +4,8 @@ import type { ReactNode } from "react"
 import { cheapestRows, craftsByItem, groupReagents, usedIn } from "./rows"
 import { useRoute } from "./route"
 import type { Page, Route } from "./route"
+import { buyScore } from "./score"
+import type { BuyScore } from "./score"
 import { usePersistent } from "./settings"
 import { bestReset, churnLevels, DEFAULT_ASSUMPTIONS, isDowntrend, lowBuy, pickResets } from "./trade"
 import type { Assumptions, ChurnLevels, Plan, Portfolio, Tier } from "./trade"
@@ -96,6 +98,8 @@ export interface AppValue extends AppData {
   setCartQuantity: (recipeId: number, quantity: number) => void
   clearCart: () => void
   trades: Trades
+  /** Der Kauf-Score je Item, wie die Annahmen ihn gerade ergeben. */
+  scores: Map<number, BuyScore>
   route: Route
   /** Wechselt die Seite. Das Item in der Seitenleiste bleibt offen. */
   go: (page: Page) => void
@@ -164,6 +168,14 @@ export function AppProvider({ data, children }: { data: AppData; children: React
     return { low, lowSteady, resets, portfolio: pickResets(resets, a) }
   }, [data, a])
 
+  const scores = useMemo(() => {
+    const map = new Map<number, BuyScore>()
+    for (const row of data.rows.values()) {
+      map.set(row.item_id, buyScore(row, data.ladder.get(row.item_id), a, data.levels))
+    }
+    return map
+  }, [data, a])
+
   const go = useCallback(
     (page: Page) => navigate({ page, id: route.page === "item" ? null : route.id }),
     [navigate, route],
@@ -196,6 +208,7 @@ export function AppProvider({ data, children }: { data: AppData; children: React
       setCartQuantity,
       clearCart,
       trades,
+      scores,
       route,
       go,
       select,
@@ -203,7 +216,7 @@ export function AppProvider({ data, children }: { data: AppData; children: React
       back,
       name,
     }),
-    [data, a, setA, professions, setProfessions, watch, toggleWatch, cart, setCartQuantity, clearCart, trades, route, go, select, open, back, name],
+    [data, a, setA, professions, setProfessions, watch, toggleWatch, cart, setCartQuantity, clearCart, trades, scores, route, go, select, open, back, name],
   )
   return <Context.Provider value={value}>{children}</Context.Provider>
 }

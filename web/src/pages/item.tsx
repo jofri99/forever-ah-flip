@@ -1,6 +1,7 @@
 import { ArrowLeft, ExternalLink } from "lucide-react"
 
 import { Hint, StarButton, Stat, Tag } from "@/components/bits"
+import { BuyScorePanel, LEVEL_LABEL } from "@/components/buy-score"
 import { Heatmap } from "@/components/heatmap"
 import { CraftSection, ItemTags, UsedInSection, VendorsSection } from "@/components/item-sections"
 import { Change, Count, Dash, Money } from "@/components/money"
@@ -13,6 +14,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { useApp } from "@/lib/app"
 import { formatInt, formatPercent, formatRatio, moneyText } from "@/lib/format"
 import type { Page } from "@/lib/route"
+import { scoreLevel } from "@/lib/score"
 import { useSeries } from "@/lib/series"
 import { churn, isDowntrend, TREND_FIT } from "@/lib/trade"
 import type { MarketRow } from "@/lib/types"
@@ -47,6 +49,7 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
   }
 
   const ratio = churn(row)
+  const score = app.scores.get(itemId)?.score
   const tiers = app.ladder.get(itemId)
   const hasCrafting = app.craftsByItem.has(itemId) || app.usedIn.has(itemId)
   const hasVendors = (app.vendors.get(itemId)?.length ?? 0) > 0 || (row?.vendor_sell ?? 0) > 0
@@ -76,6 +79,9 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
 
       {row && (
         <div className="mb-3.5 grid grid-cols-[repeat(auto-fit,minmax(140px,1fr))] gap-2">
+          <Stat label="Buy score" sub={score == null ? "nothing to measure" : `of 100 · ${LEVEL_LABEL[scoreLevel(score)]}`}>
+            {score == null ? <Dash /> : score}
+          </Stat>
           <Stat
             label="Lowest now"
             sub={row.usual_price && row.min_price != null ? `${Math.round((row.min_price / row.usual_price) * 100)}% of usual` : undefined}
@@ -154,6 +160,11 @@ export function ItemPage({ itemId, origin }: { itemId: number; origin: Page }) {
           )}
         </div>
         <div className="flex min-w-0 flex-col gap-3.5">
+          {row && (
+            <Panel title="Is it worth buying?" padded>
+              <BuyScorePanel itemId={itemId} />
+            </Panel>
+          )}
           {row && (
             <Panel title="Price ladder and what a buy-out costs" padded>
               <PriceLadder itemId={itemId} prefer={origin === "low" ? "low" : "reset"} />
